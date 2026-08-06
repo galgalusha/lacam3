@@ -16,6 +16,9 @@ HNode::HNode(Config _C, DistTable *D, HNode *_parent, int _g, int _h)
       search_tree(std::queue<LNode *>())
 {
   ++COUNT;
+  // if (COUNT % 1000 == 0) {
+  //   std::cout << "HNode Count: " << COUNT << std::endl;
+  // }
 
   search_tree.push(new LNode());
   const auto N = C.size();

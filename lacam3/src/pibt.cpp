@@ -65,11 +65,12 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
 
 bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
 {
+  func_pibt_counter++;
   const auto K = Q_from[i]->neighbor.size();
 
   // exploit scatter data
   Vertex *prioritized_vertex = nullptr;
-  if (scatter != nullptr) {
+  if (scatter != nullptr && !scatter->is_disabled && std::find(scatter->exampted_agents.begin(), scatter->exampted_agents.end(), i) == scatter->exampted_agents.end()) {
     auto itr_s = scatter->scatter_data[i].find(Q_from[i]->id);
     if (itr_s != scatter->scatter_data[i].end()) {
       prioritized_vertex = itr_s->second;

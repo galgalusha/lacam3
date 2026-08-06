@@ -3,23 +3,7 @@
 #include <algorithm>
 #include <iostream>
 
-bool Planner::FLG_SWAP = true;
-bool Planner::FLG_STAR = true;
-bool Planner::FLG_MULTI_THREAD = true;
-int Planner::SCATTER_MARGIN = 10;
-int Planner::PIBT_NUM = 10;
-bool Planner::FLG_REFINER = true;
-int Planner::REFINER_NUM = 4;
-bool Planner::FLG_SCATTER = true;
-float Planner::RANDOM_INSERT_PROB1 = 0.1;
-float Planner::RANDOM_INSERT_PROB2 = 0.01;
-bool Planner::FLG_RANDOM_INSERT_INIT_NODE = false;
-float Planner::RECURSIVE_RATE = 0.2;
-double Planner::RECURSIVE_TIME_LIMIT = 1000;
-
 std::string Planner::MSG;
-int Planner::CHECKPOINTS_DURATION = 5000;
-constexpr int CHECKPOINTS_NIL = -1;
 
 constexpr auto TIME_ZERO = std::chrono::seconds(0);
 
@@ -45,8 +29,7 @@ Planner::Planner(const Instance *_ins, int _verbose, const Deadline *_deadline,
       H_goal(nullptr),
       search_iter(0),
       time_initial_solution(-1),
-      cost_initial_solution(-1),
-      checkpoints()
+      cost_initial_solution(-1)
 {
 }
 
@@ -61,7 +44,6 @@ Planner::~Planner()
 Solution Planner::solve()
 {
   info(1, verbose, deadline, "start search");
-  update_checkpoints();
 
   // insert initial node
   H_init = create_highlevel_node(ins->starts, nullptr);
@@ -72,8 +54,8 @@ Solution Planner::solve()
 
   // search loop
   while (!OPEN.empty() && !is_expired(deadline)) {
+    scatter->exampted_agents.clear();
     search_iter += 1;
-    update_checkpoints();
 
     // check pooled procedures
     refiner_pool.remove_if([&](auto &proc) {
@@ -89,9 +71,11 @@ Solution Planner::solve()
     // do not pop here!
     auto H = OPEN.front();
 
+    if (H->parent == nullptr) scatter->is_disabled = false;
+
     // random insert after initial solution found
-    if (H_goal != nullptr && get_random_float(MT) < RANDOM_INSERT_PROB2) {
-      H = FLG_RANDOM_INSERT_INIT_NODE
+    if (H_goal != nullptr && get_random_float(MT) < Params::RANDOM_INSERT_PROB2) {
+      H = Params::FLG_RANDOM_INSERT_INIT_NODE
               ? H_init
               : OPEN[get_random_int(MT, 0, OPEN.size() - 1)];
     }
@@ -108,15 +92,23 @@ Solution Planner::solve()
       cost_initial_solution = H->g;
       H_goal = H;
       info(1, verbose, deadline, "found initial solution, cost: ", H_goal->g);
-      if (!FLG_STAR) break;  // finish search
+      if (!Params::FLG_STAR) break;  // finish search
       set_refiner();         // refining start
       continue;
     }
 
+    if (Params::RAND_SCATTER_REMOVAL) set_random_scatter_examptions(H);
+
     // low level search
-    auto L = H->get_next_lowlevel_node(MT);
+    LNode* L;
+    if (Params::RAND_LL_NODE) L = get_next_random_lowlevel_node(H);
+    else if (Params::EMPTY_LL_NODE) L = new LNode();
+    else L = H->get_next_lowlevel_node(MT);
+    H->ll_count++;
+
+
     if (L == nullptr) {
-      OPEN.pop_front();
+      // if (H->ll_count > 100) OPEN.pop_front();
       continue;
     }
 
@@ -124,21 +116,31 @@ Solution Planner::solve()
     auto Q_to = Config(N, nullptr);
     auto res = set_new_config(H, L, Q_to);
     delete L;
-    if (!res) continue;
+    if (!res) {
+      continue;
+    }
+
+    auto g_val = H->g + get_edge_cost(H->C, Q_to);
+    auto h_val = heuristic->get(Q_to);
+    auto f_val = g_val + h_val;
 
     // check explored list
     auto iter = EXPLORED.find(Q_to);
     if (iter != EXPLORED.end()) {
-      // known configuration
       rewrite(H, iter->second);
 
-      if (get_random_float(MT) >= RANDOM_INSERT_PROB1) {
+      if (get_random_float(MT) >= Params::RANDOM_INSERT_PROB1) {
         OPEN.push_front(iter->second);  // usual
       } else {
         OPEN.push_front(H_init);  // sometimes
       }
     } else {
-      // new one -> insert
+      // prune check
+      if (H_goal != nullptr) {
+        if (f_val >= H_goal->g) {
+          continue;
+        }
+      }
       auto H_new = create_highlevel_node(Q_to, H);
       OPEN.push_front(H_new);
     }
@@ -150,7 +152,6 @@ Solution Planner::solve()
   if (is_optimal) OPEN.clear();
 
   // end processing
-  update_checkpoints();
   logging();
   auto solution = backtrack(H_goal);        // obtain solution
   for (auto p : EXPLORED) delete p.second;  // memory management
@@ -208,8 +209,8 @@ Solution Planner::backtrack(HNode *H)
 bool Planner::set_new_config(HNode *H, LNode *L, Config &Q_to)
 {
   // worker-id, time -> configuration
-  auto Q_cands = std::vector<Config>(PIBT_NUM, Config(N, nullptr));
-  auto f_vals = std::vector<int>(PIBT_NUM, INT_MAX);
+  auto Q_cands = std::vector<Config>(Params::PIBT_NUM, Config(N, nullptr));
+  auto f_vals = std::vector<int>(Params::PIBT_NUM, INT_MAX);
 
   // parallel
   auto worker = [&](int k) {
@@ -220,18 +221,18 @@ bool Planner::set_new_config(HNode *H, LNode *L, Config &Q_to)
     if (res)
       f_vals[k] = get_edge_cost(H->C, Q_cands[k]) + heuristic->get(Q_cands[k]);
   };
-  if (FLG_MULTI_THREAD && PIBT_NUM > 1) {
+  if (Params::FLG_MULTI_THREAD && Params::PIBT_NUM > 1) {
     auto threads = std::vector<std::thread>();
-    for (auto k = 0; k < PIBT_NUM; ++k) threads.emplace_back(worker, k);
+    for (auto k = 0; k < Params::PIBT_NUM; ++k) threads.emplace_back(worker, k);
     for (auto &th : threads) th.join();
   } else {
-    for (auto k = 0; k < PIBT_NUM; ++k) worker(k);
+    for (auto k = 0; k < Params::PIBT_NUM; ++k) worker(k);
   }
 
   // obtain the best score
   auto min_f_val = INT_MAX;
   auto min_f_val_idx = -1;
-  for (auto k = 0; k < PIBT_NUM; ++k) {
+  for (auto k = 0; k < Params::PIBT_NUM; ++k) {
     if (f_vals[k] < min_f_val) {
       min_f_val = f_vals[k];
       min_f_val_idx = k;
@@ -285,13 +286,13 @@ int Planner::get_edge_cost(const Config &C1, const Config &C2)
 
 void Planner::set_scatter()
 {
-  if (!FLG_SCATTER) return;
+  if (!Params::FLG_SCATTER) return;
   info(1, verbose, deadline, "start computing SUO");
   auto scatter_deadline =
       Deadline(deadline == nullptr
                    ? INT_MAX
                    : (deadline->time_limit_ms - elapsed_ms(deadline)) / 2);
-  auto margin = SCATTER_MARGIN < 0 ? get_random_int(MT, 0, 30) : SCATTER_MARGIN;
+  auto margin = Params::SCATTER_MARGIN < 0 ? get_random_int(MT, 0, 30) : Params::SCATTER_MARGIN;
   scatter = new Scatter(ins, D, &scatter_deadline, 3, verbose - 4, margin);
   scatter->construct();
   info(1, verbose, deadline, "finish computing SUO",
@@ -302,18 +303,18 @@ void Planner::set_scatter()
 
 void Planner::set_pibt()
 {
-  for (auto k = 0; k < PIBT_NUM; ++k) {
-    pibts.emplace_back(new PIBT(ins, D, k + seed, FLG_SWAP, scatter));
+  for (auto k = 0; k < Params::PIBT_NUM; ++k) {
+    pibts.emplace_back(new PIBT(ins, D, k + seed, Params::FLG_SWAP, scatter));
   }
 }
 
 void Planner::set_refiner()
 {
-  if (!FLG_REFINER) return;
-  if (!FLG_MULTI_THREAD) return;
+  if (!Params::FLG_REFINER) return;
+  if (!Params::FLG_MULTI_THREAD) return;
   auto plan = backtrack(H_goal);
   info(2, verbose, deadline, "invoke refiners");
-  for (auto k = 0; k < REFINER_NUM; ++k) {
+  for (auto k = 0; k < Params::REFINER_NUM; ++k) {
     ++seed_refiner;
     refiner_pool.emplace_back(
         std::async(std::launch::async, &Planner::get_refined_plan, this, plan));
@@ -324,13 +325,13 @@ Solution Planner::get_refined_plan(const Solution &plan)
 {
   auto MT_internal = std::mt19937(seed_refiner);
   if (depth < 1 && plan.size() > 3 &&
-      get_random_float(MT_internal) < RECURSIVE_RATE) {
+      get_random_float(MT_internal) < Params::RECURSIVE_RATE) {
     // recursive LaCAM
     auto ins_tmp =
         Instance(ins->G, plan[get_random_int(MT_internal, 1, plan.size() - 2)],
                  ins->goals, N);
     auto deadline_tmp = Deadline(std::min(
-        RECURSIVE_TIME_LIMIT,
+        Params::RECURSIVE_TIME_LIMIT,
         deadline == nullptr ? INT_MAX
                             : deadline->time_limit_ms - elapsed_ms(deadline)));
     auto planner_tmp =
@@ -341,7 +342,7 @@ Solution Planner::get_refined_plan(const Solution &plan)
     info(4, verbose, deadline, "refiner-", planner_tmp.seed,
          "\tcompleted (recursive LaCAM)");
     return res;
-  } else if (RECURSIVE_RATE < 1.0) {
+  } else if (Params::RECURSIVE_RATE < 0.99) {
     // iterative refinement
     return refine(ins, deadline, plan, D, seed_refiner, verbose - 4);
   } else {
@@ -349,25 +350,75 @@ Solution Planner::get_refined_plan(const Solution &plan)
   }
 }
 
-void Planner::update_checkpoints()
+LNode *Planner::get_next_random_lowlevel_node(HNode *H)
 {
-  const auto time = elapsed_ms(deadline);
-  while (time >= checkpoints.size() * CHECKPOINTS_DURATION) {
-    checkpoints.push_back(H_goal != nullptr ? H_goal->f : CHECKPOINTS_NIL);
+  // std::cout << ".";
+  double t = H->ll_count;
+
+  if (t < 5) return new LNode();
+
+  // if (H->ll_count % 3 == 0) return new LNode();
+
+  int n = 1 + std::log(t) / std::log(5.0);
+
+  int pool_size = std::min((int)H->order.size(), n);
+  auto pool = std::vector<int>(H->order.begin(), H->order.begin() + pool_size);
+  std::shuffle(pool.begin(), pool.end(), MT);
+  n = std::min(n, pool_size);
+
+  auto L = new LNode();
+  for (int p = 0; p < n; ++p) {
+    int agent = pool[p];
+    Vertex* v = H->C[agent];
+    int current_distance_to_goal = D->get(agent, v);
+    std::vector<Vertex*> neighbors;
+    neighbors.reserve(4);
+    neighbors.push_back(v);
+    for (int n = 0; n < v->neighbor.size(); n++) {
+        Vertex* u = v->neighbor[n];
+      // if (D->get(agent, u) < current_distance_to_goal) {
+        neighbors.push_back(u);
+      // }
+    }
+    if (neighbors.empty()) continue;
+    int idx = get_random_int(MT, 0, static_cast<int>(neighbors.size()) - 1);
+    L->who.push_back(agent);
+    L->where.push_back(neighbors[idx]);
+  }
+  return L;
+}
+
+void Planner::set_random_scatter_examptions(HNode *H)
+{
+  if (H->parent == nullptr && H->ll_count % 2 == 0) {
+    scatter->is_disabled = true;
+    return;
+  }
+  
+  if (H->ll_count < 10) return;
+  int n = std::sqrt(H->ll_count);
+
+  if (scatter == nullptr) return;
+  for (int x = 0; x < n; x++) {
+    int i = H->order[x];
+    if (get_random_float(MT) < 0.5f) {
+      scatter->exampted_agents.push_back(i);
+    }
   }
 }
 
 void Planner::logging()
 {
   if (depth > 0) return;
-  MSG += "checkpoints=";
-  for (auto &k : checkpoints) MSG += std::to_string(k) + ",";
   MSG +=
       "\ncomp_time_initial_solution=" + std::to_string(time_initial_solution);
   MSG += "\ncost_initial_solution=" + std::to_string(cost_initial_solution);
   MSG += "\nsearch_iteration=" + std::to_string(search_iter);
   MSG += "\nnum_high_level_node=" + std::to_string(HNode::COUNT);
   MSG += "\nnum_low_level_node=" + std::to_string(LNode::COUNT);
+
+  int pibt_func_count = 0;
+  for (auto& p: pibts) pibt_func_count += p->func_pibt_counter;
 
   if (H_goal != nullptr && OPEN.empty()) {
     info(1, verbose, deadline, "solved optimally, cost:", H_goal->g);
@@ -380,4 +431,6 @@ void Planner::logging()
   }
   info(1, verbose, deadline, "search iteration:", search_iter,
        "\texplored:", EXPLORED.size());
+  info(1, verbose, deadline, "search npibt_func_count:", pibt_func_count/1000, "k");
+
 }

@@ -20,7 +20,7 @@ Scatter::Scatter(const Instance *_ins, DistTable *_D, const Deadline *_deadline,
 {
 }
 
-void Scatter::construct()
+void Scatter::construct(int count)
 {
   info(0, verbose, deadline, "scatter", "\tinvoked");
 
@@ -44,7 +44,8 @@ void Scatter::construct()
 
   // main loop
   auto loop = 0;
-  while (loop < 2 || CT.collision_cnt < collision_cnt_last) {
+//  while (loop < 2 || CT.collision_cnt < collision_cnt_last) {
+  while (loop < count) {
     ++loop;
     collision_cnt_last = CT.collision_cnt;
 

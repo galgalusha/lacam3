@@ -1,6 +1,9 @@
 #include <argparse/argparse.hpp>
 #include <iostream>
 #include <lacam.hpp>
+#include <params.hpp>
+#include <rollout_planner.hpp>
+#include <scatter_mab_planner.hpp>
 
 int main(int argc, char *argv[])
 {
@@ -68,6 +71,26 @@ int main(int argc, char *argv[])
       .help("turn off iterative refinement")
       .default_value(false)
       .implicit_value(true);
+  program.add_argument("-rand-ll-node", "--rand-ll-node")
+      .help("use random low-level node selection")
+      .default_value(false)
+      .implicit_value(true);
+  program.add_argument("-empty-ll-node", "--empty-ll-node")
+      .help("use empty low-level node selection")
+      .default_value(false)
+      .implicit_value(true);
+  program.add_argument("-rand-scatter-removal", "--rand-scatter-removal")
+      .help("use random low-level node selection")
+      .default_value(false)
+      .implicit_value(true);
+  program.add_argument("-rollout-mode", "--rollout-mode")
+      .help("")
+      .default_value(false)
+      .implicit_value(true);
+  program.add_argument("--scatter-mab")
+      .help("use ScatterMABPlanner")
+      .default_value(false)
+      .implicit_value(true);
   program.add_argument("--refiner-num")
       .help("specify the number of refiners")
       .default_value(std::string("4"));
@@ -77,9 +100,6 @@ int main(int argc, char *argv[])
   program.add_argument("--recursive-time-limit")
       .help("time limit (sec) of the recursive call")
       .default_value(std::string("1"));
-  program.add_argument("--checkpoints-duration")
-      .help("for recording")
-      .default_value(std::string("5"));
   try {
     program.parse_known_args(argc, argv);
   } catch (const std::runtime_error &err) {
@@ -104,38 +124,56 @@ int main(int argc, char *argv[])
 
   // solver parameters
   const auto flg_no_all = program.get<bool>("no-all");
-  Planner::FLG_SWAP = !program.get<bool>("no-swap") && !flg_no_all;
-  Planner::FLG_STAR = !program.get<bool>("no-star") && !flg_no_all;
-  Planner::FLG_MULTI_THREAD =
+  Params::FLG_SWAP = !program.get<bool>("no-swap") && !flg_no_all;
+  Params::FLG_STAR = !program.get<bool>("no-star") && !flg_no_all;
+  Params::FLG_MULTI_THREAD =
       !program.get<bool>("no-multi-thread") && !flg_no_all;
-  Planner::PIBT_NUM =
+  Params::PIBT_NUM =
       flg_no_all ? 1 : std::stoi(program.get<std::string>("pibt-num"));
-  Planner::FLG_REFINER = !program.get<bool>("no-refiner") && !flg_no_all;
-  Planner::REFINER_NUM = std::stoi(program.get<std::string>("refiner-num"));
-  Planner::FLG_SCATTER = !program.get<bool>("no-scatter") && !flg_no_all;
-  Planner::SCATTER_MARGIN =
+  Params::FLG_REFINER = !program.get<bool>("no-refiner") && !flg_no_all;
+  Params::RAND_LL_NODE = program.get<bool>("rand-ll-node");
+  Params::ROLLOUT_MODE = program.get<bool>("rollout-mode");
+  Params::EMPTY_LL_NODE = program.get<bool>("empty-ll-node");
+  Params::RAND_SCATTER_REMOVAL = program.get<bool>("rand-scatter-removal");
+  Params::REFINER_NUM = std::stoi(program.get<std::string>("refiner-num"));
+  Params::FLG_SCATTER = !program.get<bool>("no-scatter") && !flg_no_all;
+  Params::SCATTER_MARGIN =
       std::stoi(program.get<std::string>("scatter-margin"));
-  Planner::RANDOM_INSERT_PROB1 =
+  Params::RANDOM_INSERT_PROB1 =
       flg_no_all ? 0
                  : std::stof(program.get<std::string>("random-insert-prob1"));
-  Planner::RANDOM_INSERT_PROB2 =
+  Params::RANDOM_INSERT_PROB2 =
       flg_no_all ? 0
                  : std::stof(program.get<std::string>("random-insert-prob2"));
-  Planner::FLG_RANDOM_INSERT_INIT_NODE =
+  Params::FLG_RANDOM_INSERT_INIT_NODE =
       program.get<bool>("random-insert-init-node") && !flg_no_all;
-  Planner::RECURSIVE_RATE =
+  Params::RECURSIVE_RATE =
       flg_no_all ? 0 : std::stof(program.get<std::string>("recursive-rate"));
-  Planner::RECURSIVE_TIME_LIMIT =
+  Params::RECURSIVE_TIME_LIMIT =
       flg_no_all
           ? 0
           : std::stof(program.get<std::string>("recursive-time-limit")) * 1000;
-  Planner::CHECKPOINTS_DURATION =
-      std::stof(program.get<std::string>("checkpoints-duration")) * 1000;
+  Params::SCATTER_MAB = program.get<bool>("scatter-mab");
 
   // solve
   const auto deadline = Deadline(time_limit_sec * 1000);
-  const auto solution = solve(ins, verbose - 1, &deadline, seed);
+
+  Solution solution;
+
+  if (Params::SCATTER_MAB) {
+    info(0, verbose, &deadline, "[v] SCATTER_MAB");
+    ScatterMABPlanner planner(&ins, verbose, &deadline, seed);
+    solution = planner.solve();
+  } else if (Params::ROLLOUT_MODE) {
+    info(0, verbose, &deadline, "[v] ROLLOUT_MODE");
+    RolloutPlanner planner(&ins, verbose, &deadline, seed);
+    solution = planner.solve();
+  } else {
+    solution = solve(ins, verbose - 1, &deadline, seed);
+  }
+
   const auto comp_time_ms = deadline.elapsed_ms();
+
 
   // failure
   if (solution.empty()) info(1, verbose, &deadline, "failed to solve");

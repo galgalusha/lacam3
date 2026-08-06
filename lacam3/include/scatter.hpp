@@ -25,6 +25,8 @@ struct Scatter {
   DistTable *D;
   const int cost_margin;
   int sum_of_path_length;
+  std::vector<int> exampted_agents;
+  bool is_disabled = false;
 
   // outcome
   std::vector<Path> paths;
@@ -34,7 +36,7 @@ struct Scatter {
   // collision data
   CollisionTable CT;
 
-  void construct();
+  void construct(int count = 5);
 
   Scatter(const Instance *_ins, DistTable *_D, const Deadline *_deadline,
           const int seed = 0, int _verbose = 0, int _cost_margin = 2);

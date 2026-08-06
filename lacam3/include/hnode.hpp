@@ -29,6 +29,7 @@ struct HNode {
   std::vector<float> priorities;
   std::vector<int> order;
   std::queue<LNode *> search_tree;
+  int ll_count = 0;
 
   HNode(Config _C, DistTable *D, HNode *_parent = nullptr, int _g = 0,
         int _h = 0);

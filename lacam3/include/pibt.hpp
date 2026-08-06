@@ -21,6 +21,7 @@ struct PIBT {
   const int N;  // number of agents
   const int V_size;
   DistTable *D;
+  int func_pibt_counter = 0;
 
   // specific to PIBT
   const int NO_AGENT;
