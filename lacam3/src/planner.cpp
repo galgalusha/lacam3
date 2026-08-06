@@ -295,7 +295,7 @@ void Planner::set_scatter()
                    ? INT_MAX
                    : (deadline->time_limit_ms - elapsed_ms(deadline)) / 2);
   auto margin = Params::SCATTER_MARGIN < 0 ? get_random_int(MT, 0, 30) : Params::SCATTER_MARGIN;
-  scatter = new WaitScatter(ins, D, &scatter_deadline, 3, verbose - 4, margin);
+  scatter = new Scatter(ins, D, &scatter_deadline, 3, verbose - 4, margin);
   scatter->construct(5);
   info(1, verbose, deadline, "finish computing SUO");
 }

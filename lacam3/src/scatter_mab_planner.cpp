@@ -7,7 +7,6 @@
 std::string ScatterMABPlanner::MSG;
 
 constexpr auto TIME_ZERO = std::chrono::seconds(0);
-static constexpr double EPSILON = 0.2;
 static constexpr const int MIN_EPOCHS_PER_ARM = 5;
 static const std::vector<int> margins = {5, 10, 20, 40};
 static const int SCATTER_NUM = static_cast<int>(margins.size());
@@ -169,28 +168,45 @@ Solution ScatterMABPlanner::solve()
   return solution;
 }
 
-static int get_next_arm(const std::vector<Arm> &arms, int total_runs, int min_cost, int p90_cost)
+static int get_next_arm(const std::vector<Arm> &arms)
 {
-  const int n = static_cast<int>(arms.size());
-
-  // warm-up: round-robin until every arm has at least 5 costs
-  bool warming_up = std::any_of(arms.begin(), arms.end(),
-                                [](const Arm &a) { return a.costs.size() < MIN_EPOCHS_PER_ARM; });
-  if (warming_up) {
-    // pick arm with fewest runs so far
-    int best = 0;
-    for (int i = 1; i < n; ++i)
-      if (arms[i].num_of_runs < arms[best].num_of_runs) best = i;
-    return best;
-  }
-
   int best = -1;
-  double best_score = -std::numeric_limits<double>::infinity();
-  for (int k = 0; k < n; ++k) {
-    double s = arms[k].get_ucb1_score(total_runs, min_cost, p90_cost);
-    if (s > best_score) { best_score = s; best = k; }
+  for (int i = 0; i < static_cast<int>(arms.size()); ++i) {
+    if (!arms[i].active) continue;
+    if (best == -1 || arms[i].num_of_runs < arms[best].num_of_runs) best = i;
   }
   return best;
+}
+
+// eliminates the active arm with the highest median cost when all active arms reach the threshold
+static bool maybe_eliminate_arm(std::vector<Arm> &arms, int &elimination_round, int &killed_id)
+{
+  int active_count = 0;
+  for (const auto &arm : arms) if (arm.active) ++active_count;
+  if (active_count <= 1) return true;
+
+  int threshold = elimination_round * MIN_EPOCHS_PER_ARM;
+  for (const auto &arm : arms)
+    if (arm.active && arm.num_of_runs < threshold) return false;
+
+  int worst = -1;
+  double worst_median = -std::numeric_limits<double>::infinity();
+  for (int i = 0; i < static_cast<int>(arms.size()); ++i) {
+    if (!arms[i].active) continue;
+    double median;
+    if (arms[i].costs.empty()) {
+      median = std::numeric_limits<double>::infinity();
+    } else {
+      auto sorted = arms[i].costs;
+      std::sort(sorted.begin(), sorted.end());
+      median = sorted[sorted.size() / 2];
+    }
+    if (worst == -1 || median > worst_median) { worst_median = median; worst = i; }
+  }
+  arms[worst].active = false;
+  killed_id = worst;
+  ++elimination_round;
+  return active_count - 1 <= 1;
 }
 
 static std::pair<int, int> get_min_and_p90_costs(const std::vector<Arm> &arms)
@@ -208,23 +224,6 @@ static std::pair<int, int> get_min_and_p90_costs(const std::vector<Arm> &arms)
 
 void print_arm_stats(const std::vector<Arm> &arms);
 
-static bool check_exploration_convergence(const std::vector<Arm> &arms, int total_runs)
-{
-  if (total_runs == 0) return false;
-  for (const auto &arm : arms)
-    if (arm.num_of_runs < MIN_EPOCHS_PER_ARM) return false;
-  // find arm with most pulls
-  const Arm *most_pulled = &arms[0];
-  for (auto &arm : arms)
-    if (arm.num_of_runs > most_pulled->num_of_runs) most_pulled = &arm;
-  if (most_pulled->num_of_runs == 0) return false;
-  // UCB exploration factor for that arm
-  double exploration = std::sqrt(2.0 * std::log(static_cast<double>(total_runs)) /
-                                 most_pulled->num_of_runs);
-  std::cout << "Inconfidence: " <<  exploration << std::endl;                               
-  return exploration < EPSILON;
-}
-
 void ScatterMABPlanner::explore_scatters()
 {
   // construct scatters in parallel
@@ -233,7 +232,7 @@ void ScatterMABPlanner::explore_scatters()
   for (int k = 0; k < SCATTER_NUM; ++k) {
     scatter_futures.push_back(exploration_thread_pool.submit([&, k]() -> IScatter * {
       auto sd = Deadline(scatter_deadline_ms);
-      auto *s = new WaitScatter(ins, D, &sd, 3, verbose - 4, margins[k]);
+      auto *s = new Scatter(ins, D, &sd, 3, verbose - 4, margins[k]);
       s->construct(5);
       info(1, verbose, deadline, "Scatter ", k, " created");
       return s;
@@ -253,6 +252,7 @@ void ScatterMABPlanner::explore_scatters()
   std::mutex result_mutex;
   int total_runs = 0;
   int global_best_cost = INT_MAX;
+  int elimination_round = 1;
 
   // generate per-worker seeds deterministically
   std::vector<uint32_t> worker_seeds(EXPLORATION_THREADS);
@@ -265,8 +265,7 @@ void ScatterMABPlanner::explore_scatters()
       int arm_id;
       {
         std::lock_guard<std::mutex> lock(result_mutex);
-        auto [min_cost, p90_cost] = get_min_and_p90_costs(arms);
-        arm_id = get_next_arm(arms, total_runs, min_cost, p90_cost);
+        arm_id = get_next_arm(arms);
       }
 
       EpochResult result = run_epoch(arm_id, arms[arm_id].scatter, local_mt);
@@ -279,13 +278,13 @@ void ScatterMABPlanner::explore_scatters()
           arms[arm_id].costs.push_back(result.cost);
           if (result.cost < global_best_cost) {
             global_best_cost = result.cost;
-            info(1, verbose, deadline, "best cost update: ", global_best_cost);
+            info(1, verbose, deadline, "[Arm ", arm_id, "] best cost update: ", global_best_cost);
           }
         }
-        if (check_exploration_convergence(arms, total_runs)) {
-          info(1, verbose, deadline, "exploration converged");
-          is_exploring = false;
-        }
+        int killed_id = -1;
+        bool done = maybe_eliminate_arm(arms, elimination_round, killed_id);
+        if (killed_id != -1) info(1, verbose, deadline, "[Arm ", killed_id, "] eliminated");
+        if (done) is_exploring = false;
       }
     }
   };
@@ -299,7 +298,11 @@ void ScatterMABPlanner::explore_scatters()
   info(1, verbose, deadline, "explore_scatters done, best cost: ", global_best_cost,
        ", total runs: ", total_runs);
 
-  print_arm_stats(arms);
+  int winner = get_next_arm(arms);
+  int winner_min = arms[winner].costs.empty() ? -1
+      : *std::min_element(arms[winner].costs.begin(), arms[winner].costs.end());
+  info(1, verbose, deadline, "winning arm: ", arms[winner].id,
+       ", min cost: ", winner_min);
 }
 
 void print_arm_stats(const std::vector<Arm> &arms)
@@ -388,7 +391,7 @@ EpochResult ScatterMABPlanner::run_epoch(int arm_id, IScatter *scatter, std::mt1
     if (is_same_config(H->C, ins->goals)) {
       int cost = H->g;
       release_memory();
-      std::cout << "[Arm " << arm_id << "] reached goal. Cost: " << cost << std::endl;
+      info(4, verbose, deadline, "[Arm ", arm_id, "] reached goal. Cost: ", cost);
       return {true, cost};
     }
 
@@ -412,7 +415,7 @@ EpochResult ScatterMABPlanner::run_epoch(int arm_id, IScatter *scatter, std::mt1
     if (!ok) {
       if (--failure_budget <= 0) {
         release_memory();
-        std::cout << "[Arm " << arm_id << "] epoch failed for PIBT deadlock" << std::endl;
+        info(4, verbose, deadline, "[Arm ", arm_id, "] epoch failed for PIBT deadlock");
         return {false, 0};
       }
       continue;
@@ -426,7 +429,7 @@ EpochResult ScatterMABPlanner::run_epoch(int arm_id, IScatter *scatter, std::mt1
     if (iter != EXPLORED.end()) {
       if (--livelock_budget <= 0) {
         release_memory();
-        std::cout << "[Arm " << arm_id << "] epoch failed for PIBT livelock" << std::endl;
+        info(4, verbose, deadline, "[Arm ", arm_id, "] epoch failed for PIBT livelock");
         return {false, 0};
       }
       HNode *next_H = iter->second;
@@ -453,7 +456,7 @@ EpochResult ScatterMABPlanner::run_epoch(int arm_id, IScatter *scatter, std::mt1
   }
 
   release_memory();
-  std::cout << "[Arm " << arm_id << "] epoch failed (empty OPEN)" << std::endl;
+  info(4, verbose, deadline, "[Arm ", arm_id, "] epoch failed (empty OPEN)");
   return {false, 0};
 }
 

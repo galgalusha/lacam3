@@ -83,17 +83,7 @@ struct Arm {
   IScatter *scatter;
   std::vector<int> costs;  // protected by result_mutex in explore_scatters
   int num_of_runs = 0;     // protected by result_mutex in explore_scatters
-
-  double get_ucb1_score(int total_runs, int min_cost, int p90_cost) const
-  {
-    if (num_of_runs == 0) return std::numeric_limits<double>::infinity();
-    if (p90_cost == min_cost) return 0.5;
-    double avg_reward = 0.0;
-    for (int c : costs)
-      avg_reward += std::max(0.0, static_cast<double>(p90_cost - c) / (p90_cost - min_cost));
-    avg_reward /= num_of_runs;
-    return avg_reward + std::sqrt(2.0 * std::log(static_cast<double>(total_runs)) / num_of_runs);
-  }
+  bool active = true;      // set to false when eliminated
 };
 
 struct ScatterMABPlanner {
