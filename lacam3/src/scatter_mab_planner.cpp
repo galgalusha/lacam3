@@ -1,4 +1,5 @@
 #include "../include/scatter_mab_planner.hpp"
+#include "../include/wait_scatter.hpp"
 #include <algorithm>
 #include <iostream>
 #include <numeric>
@@ -211,17 +212,17 @@ static std::pair<int, int> get_min_and_p90_costs(const std::vector<EpochContext>
 void ScatterMABPlanner::explore_scatters()
 {
   // build scatter configs
-//  const std::array<int, SCATTER_NUM> margins = { 5, 10, 20, 40};
-  const std::array<int, SCATTER_NUM> margins = { 40, 90, 40, 90 };
+  const std::vector<int> margins = { 5, 10, 20, 40};
+  const int SCATTER_NUM = margins.size();
 
   // create scatters in parallel
   auto scatter_deadline_ms = deadline->time_limit_ms / 3;
-  std::vector<std::future<Scatter *>> scatter_futures;
+  std::vector<std::future<IScatter *>> scatter_futures;
   for (int k = 0; k < SCATTER_NUM; ++k) {
-    scatter_futures.push_back(exploration_thread_pool.submit([&, k]() -> Scatter * {
+    scatter_futures.push_back(exploration_thread_pool.submit([&, k]() -> IScatter * {
       auto sd = Deadline(scatter_deadline_ms);
-      auto *s = new Scatter(ins, D, &sd, 3, verbose - 4, margins[k]);
-      s->construct();
+      auto *s = new WaitScatter(ins, D, &sd, 3, verbose - 4, margins[k]);
+      s->construct(5);
       info(1, verbose, deadline, "Scatter", k, "created");
       return s;
     }));
@@ -233,7 +234,7 @@ void ScatterMABPlanner::explore_scatters()
   auto init_heuristic = heuristic->get(ins->starts);
   epoch_contexts.reserve(SCATTER_NUM);
   for (int k = 0; k < SCATTER_NUM; ++k) {
-    Scatter *s = scatter_futures[k].get();
+    IScatter *s = scatter_futures[k].get();
     PIBT *p = new PIBT(ins, D, seed + k, Params::FLG_SWAP, s);
     EpochContext ctx;
     ctx.id = k;
@@ -366,8 +367,13 @@ EpochResult ScatterMABPlanner::run_epoch(EpochContext &ctx)
 {
   info(1, verbose, deadline, "[Arm ", ctx.id , "] ", " epoch ", ctx.num_of_runs, " of arm ", ctx.id);
 
-  for (auto p : ctx.EXPLORED) if (p.second != ctx.H_init) delete p.second;
-  ctx.H_init->neighbor.clear();  // prevent dangling ptrs after children are freed
+  // for (auto p : ctx.EXPLORED) if (p.second != ctx.H_init) delete p.second;
+  // ctx.H_init->neighbor.clear();  // prevent dangling ptrs after children are freed
+  
+  for (auto p : ctx.EXPLORED) delete p.second;
+  ctx.H_init = create_highlevel_node(ins->starts, nullptr);
+
+
   ctx.EXPLORED.clear();
   ctx.OPEN.clear();
   ctx.OPEN.push_back(ctx.H_init);
@@ -394,7 +400,7 @@ EpochResult ScatterMABPlanner::run_epoch(EpochContext &ctx)
     // apply L's constraints and call PIBT
     auto Q_to = Config(N, nullptr);
     for (auto d = 0; d < L->depth; ++d) Q_to[L->who[d]] = L->where[d];
-    bool ok = ctx.pibt->set_new_config(H->C, Q_to, H->order);
+    bool ok = ctx.pibt->set_new_config(H->depth, H->C, Q_to, H->order);
     delete L;
 
     if (!ok) {
@@ -425,6 +431,8 @@ EpochResult ScatterMABPlanner::run_epoch(EpochContext &ctx)
           next_H->h = h_val;
           next_H->f = f_val;
           next_H->parent = H;
+          next_H->depth = next_H->parent == nullptr ? 0 : next_H->parent->depth + 1;
+
       }
       ctx.OPEN.push_front(next_H);
     } else {
@@ -497,7 +505,7 @@ bool ScatterMABPlanner::set_new_config(HNode *H, LNode *L, Config &Q_to)
     // set constraints
     for (auto d = 0; d < L->depth; ++d) Q_cands[k][L->who[d]] = L->where[d];
     // PIBT
-    auto res = pibts[k]->set_new_config(H->C, Q_cands[k], H->order);
+    auto res = pibts[k]->set_new_config(H->depth, H->C, Q_cands[k], H->order);
     if (res)
       f_vals[k] = get_edge_cost(H->C, Q_cands[k]) + heuristic->get(Q_cands[k]);
   };
@@ -546,6 +554,7 @@ void ScatterMABPlanner::rewrite(HNode *H_from, HNode *H_to)
         n_to->g = g_val;
         n_to->f = n_to->g + n_to->h;
         n_to->parent = n_from;
+        n_to->depth = n_to->parent == nullptr ? 0 : n_to->parent->depth + 1;
         Q.push(n_to);
         if (H_goal != nullptr && n_to->f < H_goal->f) OPEN.push_front(n_to);
       }
@@ -574,11 +583,8 @@ void ScatterMABPlanner::set_scatter()
                    : (deadline->time_limit_ms - elapsed_ms(deadline)) / 2);
   auto margin = Params::SCATTER_MARGIN < 0 ? get_random_int(MT, 0, 30) : Params::SCATTER_MARGIN;
   scatter = new Scatter(ins, D, &scatter_deadline, 3, verbose - 4, margin);
-  scatter->construct();
-  info(1, verbose, deadline, "finish computing SUO",
-       ", collision count: ", scatter->CT.collision_cnt,
-       ", scatter margin: ", scatter->cost_margin,
-       ", sum_of_path_length: ", scatter->sum_of_path_length);
+  scatter->construct(5);
+  info(1, verbose, deadline, "finish computing SUO");
 }
 
 void ScatterMABPlanner::set_pibt()

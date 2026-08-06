@@ -13,6 +13,7 @@ HNode::HNode(Config _C, DistTable *D, HNode *_parent, int _g, int _h)
       f(g + h),
       priorities(C.size(), 0),
       order(C.size(), 0),
+      depth(_parent == nullptr ? 0 : _parent->depth + 1),
       search_tree(std::queue<LNode *>())
 {
   ++COUNT;

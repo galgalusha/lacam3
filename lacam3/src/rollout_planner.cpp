@@ -156,7 +156,7 @@ bool RolloutPlanner::set_new_config(HNode *H, LNode *L, Config &Q_to)
   // }
   for (int t = 0; t < 10; t++) {
     for (auto d = 0; d < L->depth; ++d) Q_to[L->who[d]] = L->where[d];
-    bool res = pibts[0]->set_new_config(H->C, Q_to, H->order);
+    bool res = pibts[0]->set_new_config(H->depth, H->C, Q_to, H->order);
     if (res) return true;
     L = lnode_gen.generate(H);
   }
@@ -172,7 +172,7 @@ bool RolloutPlanner::set_new_config(HNode *H, LNode *L, Config &Q_to)
     // set constraints
     for (auto d = 0; d < L->depth; ++d) Q_cands[k][L->who[d]] = L->where[d];
     // PIBT
-    auto res = pibts[k]->set_new_config(H->C, Q_cands[k], H->order);
+    auto res = pibts[k]->set_new_config(H->depth, H->C, Q_cands[k], H->order);
     if (res) {
       f_vals[k] = get_edge_cost(H->C, Q_cands[k]) + heuristic->get(Q_cands[k]);
       is_success[k] = true;

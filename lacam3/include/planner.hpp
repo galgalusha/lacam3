@@ -46,7 +46,7 @@ struct Planner {
   Heuristic *heuristic;
 
   // scatter (SUO)
-  Scatter *scatter;
+  IScatter *scatter;
 
   // configuration generator
   std::vector<PIBT *> pibts;

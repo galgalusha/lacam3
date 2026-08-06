@@ -78,7 +78,7 @@ struct ThreadPool {
 
 struct EpochContext {
   int id;
-  Scatter *scatter;
+  IScatter *scatter;
   PIBT *pibt;
   std::deque<HNode *> OPEN;
   std::unordered_map<Config, HNode *, ConfigHasher> EXPLORED;
@@ -102,8 +102,7 @@ struct EpochContext {
 };
 
 struct ScatterMABPlanner {
-  static constexpr int SCATTER_NUM = 4;
-  static constexpr int EXPLORATION_THREADS = 4;
+  static constexpr int EXPLORATION_THREADS = 8;
   const Instance *ins;
   const Deadline *deadline;
   const int seed;
@@ -127,7 +126,7 @@ struct ScatterMABPlanner {
   ThreadPool exploration_thread_pool;
 
   // scatter (SUO)
-  Scatter *scatter;
+  IScatter *scatter;
 
   // configuration generator
   std::vector<PIBT *> pibts;

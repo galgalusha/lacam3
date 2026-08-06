@@ -1,7 +1,7 @@
 #include "../include/pibt.hpp"
 
 PIBT::PIBT(const Instance *_ins, DistTable *_D, int seed, bool _flg_swap,
-           Scatter *_scatter)
+           IScatter *_scatter)
     : ins(_ins),
       MT(std::mt19937(seed)),
       N(ins->N),
@@ -19,9 +19,11 @@ PIBT::PIBT(const Instance *_ins, DistTable *_D, int seed, bool _flg_swap,
 
 PIBT::~PIBT() {}
 
-bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
+bool PIBT::set_new_config(int current_time,
+                          const Config &Q_from, Config &Q_to,
                           const std::vector<int> &order)
 {
+  this->current_time = current_time;
   bool success = true;
   // setup cache & constraints check
   for (auto i = 0; i < N; ++i) {
@@ -70,11 +72,8 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
 
   // exploit scatter data
   Vertex *prioritized_vertex = nullptr;
-  if (scatter != nullptr && !scatter->is_disabled && std::find(scatter->exampted_agents.begin(), scatter->exampted_agents.end(), i) == scatter->exampted_agents.end()) {
-    auto itr_s = scatter->scatter_data[i].find(Q_from[i]->id);
-    if (itr_s != scatter->scatter_data[i].end()) {
-      prioritized_vertex = itr_s->second;
-    }
+  if (scatter != nullptr) {
+    prioritized_vertex = scatter->get_neighbor(current_time, i, Q_from[i]->id);
   }
 
   // set C_next

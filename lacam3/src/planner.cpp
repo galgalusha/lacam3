@@ -1,4 +1,5 @@
 #include "../include/planner.hpp"
+#include "../include/wait_scatter.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -54,7 +55,7 @@ Solution Planner::solve()
 
   // search loop
   while (!OPEN.empty() && !is_expired(deadline)) {
-    scatter->exampted_agents.clear();
+    //scatter->exampted_agents.clear();
     search_iter += 1;
 
     // check pooled procedures
@@ -71,7 +72,7 @@ Solution Planner::solve()
     // do not pop here!
     auto H = OPEN.front();
 
-    if (H->parent == nullptr) scatter->is_disabled = false;
+    // if (H->parent == nullptr) scatter->is_disabled = false;
 
     // random insert after initial solution found
     if (H_goal != nullptr && get_random_float(MT) < Params::RANDOM_INSERT_PROB2) {
@@ -217,7 +218,7 @@ bool Planner::set_new_config(HNode *H, LNode *L, Config &Q_to)
     // set constraints
     for (auto d = 0; d < L->depth; ++d) Q_cands[k][L->who[d]] = L->where[d];
     // PIBT
-    auto res = pibts[k]->set_new_config(H->C, Q_cands[k], H->order);
+    auto res = pibts[k]->set_new_config(H->depth, H->C, Q_cands[k], H->order);
     if (res)
       f_vals[k] = get_edge_cost(H->C, Q_cands[k]) + heuristic->get(Q_cands[k]);
   };
@@ -266,6 +267,7 @@ void Planner::rewrite(HNode *H_from, HNode *H_to)
         n_to->g = g_val;
         n_to->f = n_to->g + n_to->h;
         n_to->parent = n_from;
+        n_to->depth = n_to->parent == nullptr ? 0 : n_to->parent->depth + 1;
         Q.push(n_to);
         if (H_goal != nullptr && n_to->f < H_goal->f) OPEN.push_front(n_to);
       }
@@ -293,12 +295,9 @@ void Planner::set_scatter()
                    ? INT_MAX
                    : (deadline->time_limit_ms - elapsed_ms(deadline)) / 2);
   auto margin = Params::SCATTER_MARGIN < 0 ? get_random_int(MT, 0, 30) : Params::SCATTER_MARGIN;
-  scatter = new Scatter(ins, D, &scatter_deadline, 3, verbose - 4, margin);
-  scatter->construct();
-  info(1, verbose, deadline, "finish computing SUO",
-       ", collision count: ", scatter->CT.collision_cnt,
-       ", scatter margin: ", scatter->cost_margin,
-       ", sum_of_path_length: ", scatter->sum_of_path_length);
+  scatter = new WaitScatter(ins, D, &scatter_deadline, 3, verbose - 4, margin);
+  scatter->construct(5);
+  info(1, verbose, deadline, "finish computing SUO");
 }
 
 void Planner::set_pibt()
@@ -390,6 +389,7 @@ LNode *Planner::get_next_random_lowlevel_node(HNode *H)
 
 void Planner::set_random_scatter_examptions(HNode *H)
 {
+  /*
   if (H->parent == nullptr && H->ll_count % 2 == 0) {
     scatter->is_disabled = true;
     return;
@@ -405,6 +405,7 @@ void Planner::set_random_scatter_examptions(HNode *H)
       scatter->exampted_agents.push_back(i);
     }
   }
+  */
 }
 
 void Planner::logging()

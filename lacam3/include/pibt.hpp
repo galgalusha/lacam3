@@ -29,18 +29,19 @@ struct PIBT {
   std::vector<int> occupied_next;               // for quick collision checking
   std::vector<std::array<Vertex *, 5>> C_next;  // next location candidates
   std::vector<float> tie_breakers;              // random values, used in PIBT
+  int current_time;                             // set from H->depth before funcPIBT calls
 
   // swap, used in the LaCAM* paper
   bool flg_swap;
 
   // scatter
-  Scatter *scatter;
+  IScatter *scatter;
 
   PIBT(const Instance *_ins, DistTable *_D, int seed = 0, bool _flg_swap = true,
-       Scatter *_scatter = nullptr);
+       IScatter *_scatter = nullptr);
   ~PIBT();
 
-  bool set_new_config(const Config &Q_from, Config &Q_to,
+  bool set_new_config(int current_time, const Config &Q_from, Config &Q_to,
                       const std::vector<int> &order);
   bool funcPIBT(const int i, const Config &Q_from, Config &Q_to);
   int is_swap_required_and_possible(const int ai, const Config &Q_from,
