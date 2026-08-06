@@ -7,6 +7,11 @@
 std::string ScatterMABPlanner::MSG;
 
 constexpr auto TIME_ZERO = std::chrono::seconds(0);
+static constexpr double EPSILON = 0.2;
+static constexpr const int MIN_EPOCHS_PER_ARM = 5;
+static const std::vector<int> margins = {5, 10, 20, 40};
+static const int SCATTER_NUM = static_cast<int>(margins.size());
+
 
 ScatterMABPlanner::ScatterMABPlanner(const Instance *_ins, int _verbose, const Deadline *_deadline,
                  int _seed, int _depth, DistTable *_D)
@@ -170,7 +175,7 @@ static int get_next_arm(const std::vector<Arm> &arms, int total_runs, int min_co
 
   // warm-up: round-robin until every arm has at least 5 costs
   bool warming_up = std::any_of(arms.begin(), arms.end(),
-                                [](const Arm &a) { return a.costs.size() < 3; });
+                                [](const Arm &a) { return a.costs.size() < MIN_EPOCHS_PER_ARM; });
   if (warming_up) {
     // pick arm with fewest runs so far
     int best = 0;
@@ -201,11 +206,27 @@ static std::pair<int, int> get_min_and_p90_costs(const std::vector<Arm> &arms)
   return {min_cost, all_costs[p90_idx]};
 }
 
+void print_arm_stats(const std::vector<Arm> &arms);
+
+static bool check_exploration_convergence(const std::vector<Arm> &arms, int total_runs)
+{
+  if (total_runs == 0) return false;
+  for (const auto &arm : arms)
+    if (arm.num_of_runs < MIN_EPOCHS_PER_ARM) return false;
+  // find arm with most pulls
+  const Arm *most_pulled = &arms[0];
+  for (auto &arm : arms)
+    if (arm.num_of_runs > most_pulled->num_of_runs) most_pulled = &arm;
+  if (most_pulled->num_of_runs == 0) return false;
+  // UCB exploration factor for that arm
+  double exploration = std::sqrt(2.0 * std::log(static_cast<double>(total_runs)) /
+                                 most_pulled->num_of_runs);
+  std::cout << "Inconfidence: " <<  exploration << std::endl;                               
+  return exploration < EPSILON;
+}
+
 void ScatterMABPlanner::explore_scatters()
 {
-  const std::vector<int> margins = {5, 10, 20, 40};
-  const int SCATTER_NUM = static_cast<int>(margins.size());
-
   // construct scatters in parallel
   auto scatter_deadline_ms = deadline->time_limit_ms / 3;
   std::vector<std::future<IScatter *>> scatter_futures;
@@ -214,7 +235,7 @@ void ScatterMABPlanner::explore_scatters()
       auto sd = Deadline(scatter_deadline_ms);
       auto *s = new WaitScatter(ins, D, &sd, 3, verbose - 4, margins[k]);
       s->construct(5);
-      info(1, verbose, deadline, "Scatter", k, "created");
+      info(1, verbose, deadline, "Scatter ", k, " created");
       return s;
     }));
   }
@@ -239,7 +260,7 @@ void ScatterMABPlanner::explore_scatters()
 
   auto worker = [&](uint32_t worker_seed) {
     std::mt19937 local_mt(worker_seed);
-    while (!is_expired(deadline)) {
+    while (!is_expired(deadline) && is_exploring) {
       // select arm under lock
       int arm_id;
       {
@@ -261,6 +282,10 @@ void ScatterMABPlanner::explore_scatters()
             info(1, verbose, deadline, "best cost update: ", global_best_cost);
           }
         }
+        if (check_exploration_convergence(arms, total_runs)) {
+          info(1, verbose, deadline, "exploration converged");
+          is_exploring = false;
+        }
       }
     }
   };
@@ -274,6 +299,11 @@ void ScatterMABPlanner::explore_scatters()
   info(1, verbose, deadline, "explore_scatters done, best cost: ", global_best_cost,
        ", total runs: ", total_runs);
 
+  print_arm_stats(arms);
+}
+
+void print_arm_stats(const std::vector<Arm> &arms)
+{
   for (auto &arm : arms) {
     if (arm.costs.empty()) {
       std::cout << "[Arm " << arm.id << "] no successful runs" << std::endl;
