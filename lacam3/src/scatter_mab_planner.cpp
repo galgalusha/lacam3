@@ -22,7 +22,7 @@ ScatterMABPlanner::ScatterMABPlanner(const Instance *_ins, int _verbose, const D
       delete_dist_table_after_used(_D == nullptr),
       heuristic(new Heuristic(ins, D)),
       is_exploring(true),
-      epoch_contexts(),
+      arms(),
       exploration_thread_pool(EXPLORATION_THREADS),
       scatter(nullptr),
       seed_refiner(0),
@@ -41,11 +41,8 @@ ScatterMABPlanner::~ScatterMABPlanner()
 {
   if (heuristic != nullptr) delete heuristic;
   if (scatter != nullptr) delete scatter;
-  for (auto &pibt : pibts) delete pibt;
-  for (auto &ctx : epoch_contexts) {
-    delete ctx.scatter;
-    delete ctx.pibt;
-  }
+  for (auto *p : pibts) delete p;
+  for (auto &arm : arms) delete arm.scatter;
   if (delete_dist_table_after_used) delete D;
 }
 
@@ -164,43 +161,35 @@ Solution ScatterMABPlanner::solve()
   return solution;
 }
 
-static int get_next_arm(const std::vector<EpochContext> &epoch_contexts,
-                        const std::vector<bool> &arm_running,
-                        int total_runs, int min_cost, int p90_cost)
+static int get_next_arm(const std::vector<Arm> &arms, int total_runs, int min_cost, int p90_cost)
 {
-  const int n = static_cast<int>(epoch_contexts.size());
+  const int n = static_cast<int>(arms.size());
 
   // warm-up: round-robin until every arm has at least 5 costs
-  bool warming_up = std::any_of(epoch_contexts.begin(), epoch_contexts.end(),
-                                [](const EpochContext &ctx) { return ctx.costs.size() < 5; });
+  bool warming_up = std::any_of(arms.begin(), arms.end(),
+                                [](const Arm &a) { return a.costs.size() < 3; });
   if (warming_up) {
-    for (int offset = 0; offset < n; ++offset) {
-      int k = total_runs % n;  // round-robin by global run count
-      if (!arm_running[k]) return k;
-      // if the round-robin pick is busy, find the next idle arm with fewest costs
-      int best = -1;
-      for (int i = 0; i < n; ++i)
-        if (!arm_running[i] && (best == -1 || epoch_contexts[i].costs.size() < epoch_contexts[best].costs.size()))
-          best = i;
-      return best;
-    }
+    // pick arm with fewest runs so far
+    int best = 0;
+    for (int i = 1; i < n; ++i)
+      if (arms[i].num_of_runs < arms[best].num_of_runs) best = i;
+    return best;
   }
 
   int best = -1;
   double best_score = -std::numeric_limits<double>::infinity();
   for (int k = 0; k < n; ++k) {
-    if (arm_running[k]) continue;
-    double s = epoch_contexts[k].get_ucb1_score(total_runs, min_cost, p90_cost);
+    double s = arms[k].get_ucb1_score(total_runs, min_cost, p90_cost);
     if (s > best_score) { best_score = s; best = k; }
   }
   return best;
 }
 
-static std::pair<int, int> get_min_and_p90_costs(const std::vector<EpochContext> &epoch_contexts)
+static std::pair<int, int> get_min_and_p90_costs(const std::vector<Arm> &arms)
 {
   std::vector<int> all_costs;
-  for (auto &ctx : epoch_contexts)
-    for (int c : ctx.costs) all_costs.push_back(c);
+  for (auto &arm : arms)
+    for (int c : arm.costs) all_costs.push_back(c);
   if (all_costs.empty()) return {0, 0};
   std::sort(all_costs.begin(), all_costs.end());
   int min_cost = all_costs.front();
@@ -211,11 +200,10 @@ static std::pair<int, int> get_min_and_p90_costs(const std::vector<EpochContext>
 
 void ScatterMABPlanner::explore_scatters()
 {
-  // build scatter configs
-  const std::vector<int> margins = { 5, 10, 20, 40};
-  const int SCATTER_NUM = margins.size();
+  const std::vector<int> margins = {5, 10, 20, 40};
+  const int SCATTER_NUM = static_cast<int>(margins.size());
 
-  // create scatters in parallel
+  // construct scatters in parallel
   auto scatter_deadline_ms = deadline->time_limit_ms / 3;
   std::vector<std::future<IScatter *>> scatter_futures;
   for (int k = 0; k < SCATTER_NUM; ++k) {
@@ -230,108 +218,72 @@ void ScatterMABPlanner::explore_scatters()
 
   info(1, verbose, deadline, "Starting exploration");
 
-  // collect scatters and build epoch contexts
-  auto init_heuristic = heuristic->get(ins->starts);
-  epoch_contexts.reserve(SCATTER_NUM);
+  arms.reserve(SCATTER_NUM);
   for (int k = 0; k < SCATTER_NUM; ++k) {
-    IScatter *s = scatter_futures[k].get();
-    PIBT *p = new PIBT(ins, D, seed + k, Params::FLG_SWAP, s);
-    EpochContext ctx;
-    ctx.id = k;
-    ctx.scatter = s;
-    ctx.pibt = p;
-    ctx.MT = std::mt19937(seed + k);
-    ctx.H_init = new HNode(ins->starts, D, nullptr, 0, init_heuristic);
-    epoch_contexts.push_back(std::move(ctx));
+    Arm arm;
+    arm.id = k;
+    arm.scatter = scatter_futures[k].get();
+    arms.push_back(std::move(arm));
   }
 
-  // UCB1-driven parallel exploration loop
-  std::vector<std::future<EpochResult>> running;
-  std::vector<int> running_ctx_idx;
-  std::vector<bool> arm_running(SCATTER_NUM, false);
+  std::mutex result_mutex;
   int total_runs = 0;
   int global_best_cost = INT_MAX;
 
-  auto submit_next = [&]() {
-    auto [min_cost, p90_cost] = get_min_and_p90_costs(epoch_contexts);
+  // generate per-worker seeds deterministically
+  std::vector<uint32_t> worker_seeds(EXPLORATION_THREADS);
+  for (auto &s : worker_seeds) s = MT();
 
-    // pick best UCB1 arm that is not currently running
-    int best = get_next_arm(epoch_contexts, arm_running, total_runs, min_cost, p90_cost);
-    if (best == -1) return;  // all arms already running
-    arm_running[best] = true;
-    running_ctx_idx.push_back(best);
-    running.push_back(
-        exploration_thread_pool.submit([this, best]() {
-          return run_epoch(epoch_contexts[best]);
-        }));
-  };
+  auto worker = [&](uint32_t worker_seed) {
+    std::mt19937 local_mt(worker_seed);
+    while (!is_expired(deadline)) {
+      // select arm under lock
+      int arm_id;
+      {
+        std::lock_guard<std::mutex> lock(result_mutex);
+        auto [min_cost, p90_cost] = get_min_and_p90_costs(arms);
+        arm_id = get_next_arm(arms, total_runs, min_cost, p90_cost);
+      }
 
-  // seed the pool: one task per arm so each arm runs before UCB1 kicks in
-  for (int k = 0; k < SCATTER_NUM && !is_expired(deadline); ++k) {
-    arm_running[k] = true;
-    running_ctx_idx.push_back(k);
-    running.push_back(exploration_thread_pool.submit([this, k]() {
-      return run_epoch(epoch_contexts[k]);
-    }));
-  }
+      EpochResult result = run_epoch(arm_id, arms[arm_id].scatter, local_mt);
 
-  while (!is_expired(deadline)) {
-    // collect any completed futures
-    bool collected_any = false;
-    for (int i = static_cast<int>(running.size()) - 1; i >= 0; --i) {
-      if (running[i].wait_for(std::chrono::milliseconds(1)) !=
-          std::future_status::ready)
-        continue;
-      EpochResult result = running[i].get();
-      int ctx_idx = running_ctx_idx[i];
-      running.erase(running.begin() + i);
-      running_ctx_idx.erase(running_ctx_idx.begin() + i);
-      arm_running[ctx_idx] = false;
-      ++epoch_contexts[ctx_idx].num_of_runs;
-      ++total_runs;
-      if (result.success) {
-        epoch_contexts[ctx_idx].costs.push_back(result.cost);
-        if (result.cost < global_best_cost) {
-          global_best_cost = result.cost;
-          info(1, verbose, deadline, "best cost update: ", global_best_cost);
+      {
+        std::lock_guard<std::mutex> lock(result_mutex);
+        ++total_runs;
+        ++arms[arm_id].num_of_runs;
+        if (result.success) {
+          arms[arm_id].costs.push_back(result.cost);
+          if (result.cost < global_best_cost) {
+            global_best_cost = result.cost;
+            info(1, verbose, deadline, "best cost update: ", global_best_cost);
+          }
         }
       }
-      collected_any = true;
     }
-    if (collected_any && !is_expired(deadline) &&
-        static_cast<int>(running.size()) < EXPLORATION_THREADS)
-      submit_next();
-  }
+  };
 
-  // drain remaining futures
-  for (size_t i = 0; i < running.size(); ++i) {
-    EpochResult result = running[i].get();
-    int ctx_idx = running_ctx_idx[i];
-    ++epoch_contexts[ctx_idx].num_of_runs;
-    if (result.success) {
-      epoch_contexts[ctx_idx].costs.push_back(result.cost);
-      if (result.cost < global_best_cost) {
-        global_best_cost = result.cost;
-        info(1, verbose, deadline, "best cost update: ", global_best_cost);
-      }
-    }
-  }
+  std::vector<std::future<void>> futures;
+  futures.reserve(EXPLORATION_THREADS);
+  for (int i = 0; i < EXPLORATION_THREADS; ++i)
+    futures.emplace_back(std::async(std::launch::async, worker, worker_seeds[i]));
+  for (auto &f : futures) f.wait();
+
   info(1, verbose, deadline, "explore_scatters done, best cost: ", global_best_cost,
        ", total runs: ", total_runs);
 
-  for (auto &ctx : epoch_contexts) {
-    if (ctx.costs.empty()) {
-      std::cout << "[Arm " << ctx.id << "] no successful runs" << std::endl;
+  for (auto &arm : arms) {
+    if (arm.costs.empty()) {
+      std::cout << "[Arm " << arm.id << "] no successful runs" << std::endl;
       continue;
     }
-    auto sorted = ctx.costs;
+    auto sorted = arm.costs;
     std::sort(sorted.begin(), sorted.end());
     auto percentile = [&](double p) {
       int idx = static_cast<int>(std::ceil(p * sorted.size())) - 1;
       return sorted[std::max(0, std::min(idx, static_cast<int>(sorted.size()) - 1))];
     };
     double avg = std::accumulate(sorted.begin(), sorted.end(), 0.0) / sorted.size();
-    std::cout << "[Arm " << ctx.id << "] runs=" << ctx.num_of_runs
+    std::cout << "[Arm " << arm.id << "] runs=" << arm.num_of_runs
               << " successes=" << sorted.size()
               << " avg=" << avg
               << " min=" << sorted.front()
@@ -341,11 +293,11 @@ void ScatterMABPlanner::explore_scatters()
               << std::endl;
   }
 
-  // global bucket analysis
-  auto [gmin, gp90] = get_min_and_p90_costs(epoch_contexts);
+  auto [gmin, gp90] = get_min_and_p90_costs(arms);
+  (void)gmin; (void)gp90;
   std::vector<int> all_costs_sorted;
-  for (auto &ctx : epoch_contexts)
-    for (int c : ctx.costs) all_costs_sorted.push_back(c);
+  for (auto &arm : arms)
+    for (int c : arm.costs) all_costs_sorted.push_back(c);
   if (!all_costs_sorted.empty()) {
     std::sort(all_costs_sorted.begin(), all_costs_sorted.end());
     auto gpercentile = [&](double p) {
@@ -355,59 +307,56 @@ void ScatterMABPlanner::explore_scatters()
     int gp10 = gpercentile(0.1);
     int gp20 = gpercentile(0.2);
     std::cout << "Global p10=" << gp10 << " p20=" << gp20 << std::endl;
-    for (auto &ctx : epoch_contexts) {
-      int in_p10 = static_cast<int>(std::count_if(ctx.costs.begin(), ctx.costs.end(), [gp10](int c) { return c <= gp10; }));
-      int in_p20 = static_cast<int>(std::count_if(ctx.costs.begin(), ctx.costs.end(), [gp20](int c) { return c <= gp20; }));
-      std::cout << "[Arm " << ctx.id << "] in_global_p10=" << in_p10 << " in_global_p20=" << in_p20 << std::endl;
+    for (auto &arm : arms) {
+      int in_p10 = static_cast<int>(std::count_if(arm.costs.begin(), arm.costs.end(), [gp10](int c) { return c <= gp10; }));
+      int in_p20 = static_cast<int>(std::count_if(arm.costs.begin(), arm.costs.end(), [gp20](int c) { return c <= gp20; }));
+      std::cout << "[Arm " << arm.id << "] in_global_p10=" << in_p10 << " in_global_p20=" << in_p20 << std::endl;
     }
   }
 }
 
-EpochResult ScatterMABPlanner::run_epoch(EpochContext &ctx)
+EpochResult ScatterMABPlanner::run_epoch(int arm_id, IScatter *scatter, std::mt19937 &local_mt)
 {
-  info(1, verbose, deadline, "[Arm ", ctx.id , "] ", " epoch ", ctx.num_of_runs, " of arm ", ctx.id);
+  // thread-local search state
+  std::deque<HNode *> OPEN;
+  std::unordered_map<Config, HNode *, ConfigHasher> EXPLORED;
 
-  // for (auto p : ctx.EXPLORED) if (p.second != ctx.H_init) delete p.second;
-  // ctx.H_init->neighbor.clear();  // prevent dangling ptrs after children are freed
-  
-  for (auto p : ctx.EXPLORED) delete p.second;
-  ctx.H_init = create_highlevel_node(ins->starts, nullptr);
+  auto init_h = heuristic->get(ins->starts);
+  auto *H_init = new HNode(ins->starts, D, nullptr, 0, init_h);
+  EXPLORED[ins->starts] = H_init;
+  OPEN.push_back(H_init);
 
-
-  ctx.EXPLORED.clear();
-  ctx.OPEN.clear();
-  ctx.OPEN.push_back(ctx.H_init);
+  // PIBT is not threadsafe; construct one per epoch with a fresh seed from local_mt
+  PIBT local_pibt(ins, D, static_cast<int>(local_mt()), Params::FLG_SWAP, scatter);
 
   int failure_budget = 50;
   int livelock_budget = 50;
 
-  while (!ctx.OPEN.empty()) {
-    auto *H = ctx.OPEN.front();
+  while (!OPEN.empty()) {
+    auto *H = OPEN.front();
 
-    // goal check
     if (is_same_config(H->C, ins->goals)) {
-      std::cout << "[Arm " << ctx.id << "] " << " reached goal. Cost: " << H->g << std::endl;
-      return {true, H->g};
+      int cost = H->g;
+      for (auto &p : EXPLORED) delete p.second;
+      std::cout << "[Arm " << arm_id << "] reached goal. Cost: " << cost << std::endl;
+      return {true, cost};
     }
 
-    // low-level node
-    LNode *L = H->get_next_lowlevel_node(ctx.MT);
+    LNode *L = H->get_next_lowlevel_node(local_mt);
     if (L == nullptr) {
-      ctx.OPEN.pop_front();
+      OPEN.pop_front();
       continue;
     }
 
-    // apply L's constraints and call PIBT
     auto Q_to = Config(N, nullptr);
     for (auto d = 0; d < L->depth; ++d) Q_to[L->who[d]] = L->where[d];
-    bool ok = ctx.pibt->set_new_config(H->depth, H->C, Q_to, H->order);
+    bool ok = local_pibt.set_new_config(H->depth, H->C, Q_to, H->order);
     delete L;
 
     if (!ok) {
-      --failure_budget;
-      if (failure_budget <= 0) {
-
-        std::cout << "[Arm " << ctx.id << "] " << " epoch failed for PIBT deadlock" << std::endl;
+      if (--failure_budget <= 0) {
+        for (auto &p : EXPLORED) delete p.second;
+        std::cout << "[Arm " << arm_id << "] epoch failed for PIBT deadlock" << std::endl;
         return {false, 0};
       }
       continue;
@@ -417,32 +366,31 @@ EpochResult ScatterMABPlanner::run_epoch(EpochContext &ctx)
     auto h_val = heuristic->get(Q_to);
     auto f_val = g_val + h_val;
 
-    auto iter = ctx.EXPLORED.find(Q_to);
-    if (iter != ctx.EXPLORED.end()) {
+    auto iter = EXPLORED.find(Q_to);
+    if (iter != EXPLORED.end()) {
       if (--livelock_budget <= 0) {
-        std::cout << "[Arm " << ctx.id << "] " << " epoch failed for PIBT livelock" << std::endl;
+        for (auto &p : EXPLORED) delete p.second;
+        std::cout << "[Arm " << arm_id << "] epoch failed for PIBT livelock" << std::endl;
         return {false, 0};
       }
-      // FIXED: If we hit cache but budget allows, do not leak! 
-      // Update the existing node instead of allocating a new one.
       HNode *next_H = iter->second;
       if (f_val < next_H->f) {
-          next_H->g = g_val;
-          next_H->h = h_val;
-          next_H->f = f_val;
-          next_H->parent = H;
-          next_H->depth = next_H->parent == nullptr ? 0 : next_H->parent->depth + 1;
-
+        next_H->g = g_val;
+        next_H->h = h_val;
+        next_H->f = f_val;
+        next_H->parent = H;
+        next_H->depth = next_H->parent == nullptr ? 0 : next_H->parent->depth + 1;
       }
-      ctx.OPEN.push_front(next_H);
+      OPEN.push_front(next_H);
     } else {
       HNode *next_H = new HNode(Q_to, D, H, g_val, h_val);
-      ctx.EXPLORED[Q_to] = next_H;
-      ctx.OPEN.push_front(next_H);
+      EXPLORED[Q_to] = next_H;
+      OPEN.push_front(next_H);
     }
   }
-  
-  std::cout << "[Arm " << ctx.id << "] " << " epoch failed (empty OPEN)" << std::endl;
+
+  for (auto &p : EXPLORED) delete p.second;
+  std::cout << "[Arm " << arm_id << "] epoch failed (empty OPEN)" << std::endl;
   return {false, 0};
 }
 

@@ -76,27 +76,20 @@ struct ThreadPool {
   }
 };
 
-struct EpochContext {
+struct Arm {
   int id;
   IScatter *scatter;
-  PIBT *pibt;
-  std::deque<HNode *> OPEN;
-  std::unordered_map<Config, HNode *, ConfigHasher> EXPLORED;
-  HNode *H_init;
-  std::mt19937 MT;
-  std::vector<int> costs;  // only successful run costs; written/read by main thread only
-  int num_of_runs = 0;     // total runs (success + failure); written/read by main thread only
+  std::vector<int> costs;  // protected by result_mutex in explore_scatters
+  int num_of_runs = 0;     // protected by result_mutex in explore_scatters
 
   double get_ucb1_score(int total_runs, int min_cost, int p90_cost) const
   {
     if (num_of_runs == 0) return std::numeric_limits<double>::infinity();
+    if (p90_cost == min_cost) return 0.5;
     double avg_reward = 0.0;
-    if (p90_cost == min_cost) {
-      return 0.5;
-    }
     for (int c : costs)
       avg_reward += std::max(0.0, static_cast<double>(p90_cost - c) / (p90_cost - min_cost));
-        avg_reward /= num_of_runs;
+    avg_reward /= num_of_runs;
     return avg_reward + std::sqrt(2.0 * std::log(static_cast<double>(total_runs)) / num_of_runs);
   }
 };
@@ -122,13 +115,13 @@ struct ScatterMABPlanner {
 
   // exploration (MAB) mode
   bool is_exploring;
-  std::vector<EpochContext> epoch_contexts;
+  std::vector<Arm> arms;
   ThreadPool exploration_thread_pool;
 
   // scatter (SUO)
   IScatter *scatter;
 
-  // configuration generator
+  // PIBTs for main (non-exploring) search
   std::vector<PIBT *> pibts;
 
   // for refiner
@@ -156,7 +149,7 @@ struct ScatterMABPlanner {
   ~ScatterMABPlanner();
   Solution solve();
   void explore_scatters();
-  EpochResult run_epoch(EpochContext &ctx);
+  EpochResult run_epoch(int arm_id, IScatter *scatter, std::mt19937 &local_mt);
   bool set_new_config(HNode *S, LNode *M, Config &Q_to);
   HNode *create_highlevel_node(const Config &Q, HNode *parent);
   void rewrite(HNode *H_from, HNode *H_to);
