@@ -42,7 +42,10 @@ ScatterMABPlanner::~ScatterMABPlanner()
   if (heuristic != nullptr) delete heuristic;
   if (scatter != nullptr) delete scatter;
   for (auto *p : pibts) delete p;
-  for (auto &arm : arms) delete arm.scatter;
+  for (auto &arm : arms) {
+    delete arm.scatter;
+    delete arm.H_init;
+  }
   if (delete_dist_table_after_used) delete D;
 }
 
@@ -321,10 +324,27 @@ EpochResult ScatterMABPlanner::run_epoch(int arm_id, IScatter *scatter, std::mt1
   std::deque<HNode *> OPEN;
   std::unordered_map<Config, HNode *, ConfigHasher> EXPLORED;
 
-  auto init_h = heuristic->get(ins->starts);
-  auto *H_init = new HNode(ins->starts, D, nullptr, 0, init_h);
-  EXPLORED[ins->starts] = H_init;
+  HNode* H_init = nullptr;
+
+  {
+    std::lock_guard<std::mutex> lock(*arms[arm_id].h_init_mutex);
+    if (arms[arm_id].H_init == nullptr) {
+      auto init_h = heuristic->get(ins->starts);
+      arms[arm_id].H_init = new HNode(ins->starts, D, nullptr, 0, init_h);
+    }
+    H_init = arms[arm_id].H_init;
+  }
+
   OPEN.push_back(H_init);
+
+  auto release_memory = [&]() {
+    // clear before deleting: H_init->neighbor holds raw pointers to epoch-local nodes
+    {
+      std::lock_guard<std::mutex> lock(*arms[arm_id].h_init_mutex);
+      arms[arm_id].H_init->neighbor.clear();
+    }
+    for (auto &p : EXPLORED) if (p.second != arms[arm_id].H_init) delete p.second;
+  };
 
   // PIBT is not threadsafe; construct one per epoch with a fresh seed from local_mt
   PIBT local_pibt(ins, D, static_cast<int>(local_mt()), Params::FLG_SWAP, scatter);
@@ -337,12 +357,18 @@ EpochResult ScatterMABPlanner::run_epoch(int arm_id, IScatter *scatter, std::mt1
 
     if (is_same_config(H->C, ins->goals)) {
       int cost = H->g;
-      for (auto &p : EXPLORED) delete p.second;
+      release_memory();
       std::cout << "[Arm " << arm_id << "] reached goal. Cost: " << cost << std::endl;
       return {true, cost};
     }
 
-    LNode *L = H->get_next_lowlevel_node(local_mt);
+    LNode *L;
+    if (H == arms[arm_id].H_init) {
+      std::lock_guard<std::mutex> lock(*arms[arm_id].h_init_mutex);
+      L = H->get_next_lowlevel_node(local_mt);
+    } else {
+      L = H->get_next_lowlevel_node(local_mt);
+    }
     if (L == nullptr) {
       OPEN.pop_front();
       continue;
@@ -355,7 +381,7 @@ EpochResult ScatterMABPlanner::run_epoch(int arm_id, IScatter *scatter, std::mt1
 
     if (!ok) {
       if (--failure_budget <= 0) {
-        for (auto &p : EXPLORED) delete p.second;
+        release_memory();
         std::cout << "[Arm " << arm_id << "] epoch failed for PIBT deadlock" << std::endl;
         return {false, 0};
       }
@@ -369,7 +395,7 @@ EpochResult ScatterMABPlanner::run_epoch(int arm_id, IScatter *scatter, std::mt1
     auto iter = EXPLORED.find(Q_to);
     if (iter != EXPLORED.end()) {
       if (--livelock_budget <= 0) {
-        for (auto &p : EXPLORED) delete p.second;
+        release_memory();
         std::cout << "[Arm " << arm_id << "] epoch failed for PIBT livelock" << std::endl;
         return {false, 0};
       }
@@ -383,13 +409,20 @@ EpochResult ScatterMABPlanner::run_epoch(int arm_id, IScatter *scatter, std::mt1
       }
       OPEN.push_front(next_H);
     } else {
-      HNode *next_H = new HNode(Q_to, D, H, g_val, h_val);
+      HNode *next_H;
+      if (H == arms[arm_id].H_init) {
+        // constructor calls parent->neighbor.insert(), which races on shared H_init
+        std::lock_guard<std::mutex> lock(*arms[arm_id].h_init_mutex);
+        next_H = new HNode(Q_to, D, H, g_val, h_val);
+      } else {
+        next_H = new HNode(Q_to, D, H, g_val, h_val);
+      }
       EXPLORED[Q_to] = next_H;
       OPEN.push_front(next_H);
     }
   }
 
-  for (auto &p : EXPLORED) delete p.second;
+  release_memory();
   std::cout << "[Arm " << arm_id << "] epoch failed (empty OPEN)" << std::endl;
   return {false, 0};
 }

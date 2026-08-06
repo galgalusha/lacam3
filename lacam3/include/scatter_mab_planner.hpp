@@ -77,6 +77,8 @@ struct ThreadPool {
 };
 
 struct Arm {
+  HNode* H_init = nullptr;
+  std::unique_ptr<std::mutex> h_init_mutex = std::make_unique<std::mutex>();
   int id;
   IScatter *scatter;
   std::vector<int> costs;  // protected by result_mutex in explore_scatters
