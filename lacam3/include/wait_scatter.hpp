@@ -7,6 +7,13 @@
 #include "utils.hpp"
 
 struct WaitScatter : IScatter {
+
+  enum VisitState {
+    UNVISITED = 0,
+    VISITED_BY_WAIT = 1,
+    VISITED_BY_MOVE = 2
+  };
+
   struct Node {
     Vertex *v;
     int g;           // cost-to-come
@@ -14,9 +21,9 @@ struct WaitScatter : IScatter {
     int collisions;
     Node *parent;
     uint32_t tie_breaker;
-    Vertex *waiting_for = nullptr;  // non-null when this is a wait node
-    int wait_depth = 0;             // number of consecutive waits so far
+    bool was_waiting;
   };
+
   const Instance *ins;
   Deadline *deadline;
   std::mt19937 MT;
@@ -67,11 +74,11 @@ struct WaitScatter : IScatter {
 
   void construct(int iterations) override;
 
-  template<typename OpenQueue, typename RandFunc>
+  template<typename OpenQueue>
   void expand(Node* node, int i, Vertex* s_i, int cost_ub,
-              std::deque<Node>& arena, OpenQueue& OPEN, RandFunc& fast_rand);
+              std::deque<Node>& arena, OpenQueue& OPEN);
 
-  Path astar(int i, std::vector<int>& CLOSED_cost, std::vector<int>& CLOSED_gen,
+  Path astar(int i, std::vector<VisitState>& CLOSED_cost, std::vector<int>& CLOSED_gen,
              int& current_gen, uint32_t fast_seed,
              int override_time = 0, Vertex* override_start = nullptr);
 

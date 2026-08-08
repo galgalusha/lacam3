@@ -2,21 +2,7 @@
 #include "../include/metrics.hpp"
 
 // HYPER PARAMETERS
-const int COLLISION_WEIGHT = 12;
-const float ASTAR_WEIGHT = 1;
-const int MAX_COLLISION_TIME = 50;
-const int MAX_WAIT = 10;
-
-inline int get_collision_factor(int time) {
-  return 1;
-  // int time_factor = 10;
-  // if (time <= 5) {
-  //   time_factor = 100;
-  // } else if (time <= 15) {
-  //   time_factor = 30;
-  // } 
-  // return time_factor;
-}
+const int MAX_WAIT = 2;
 
 WaitScatter::WaitScatter(const Instance *_ins, DistTable *_D,
                          Deadline *_deadline, const int seed,
@@ -45,7 +31,7 @@ void WaitScatter::construct(int iterations)
   auto collision_cnt_last = 0;
   auto paths_prev = std::vector<Path>();
 
-  auto CLOSED_cost = std::vector<int>(V_size, 0);
+  auto CLOSED_cost = std::vector<VisitState>(V_size, VisitState::UNVISITED);
   auto CLOSED_gen = std::vector<int>(V_size, 0);
   int current_gen = 0;
 
@@ -106,7 +92,7 @@ void WaitScatter::construct(int iterations)
 }
 
 Path WaitScatter::astar(int i,
-                        std::vector<int>& CLOSED_cost, std::vector<int>& CLOSED_gen,
+                        std::vector<VisitState>& CLOSED_cost, std::vector<int>& CLOSED_gen,
                         int& current_gen, uint32_t fast_seed,
                         int override_time, Vertex* override_start)
 {
@@ -116,13 +102,6 @@ Path WaitScatter::astar(int i,
                  override_time + D->get(i, override_start));
 
   const auto s_i = override_start == nullptr ? ins->starts[i] : override_start;
-
-  auto fast_rand = [&fast_seed]() {
-    fast_seed ^= fast_seed << 13;
-    fast_seed ^= fast_seed >> 17;
-    fast_seed ^= fast_seed << 5;
-    return fast_seed;
-  };
 
   auto calc_cost = [](int c, int g, int d) {
     return c;
@@ -150,109 +129,94 @@ Path WaitScatter::astar(int i,
     D->get(i, s_i),   // heuristic
     0,                // collisions
     nullptr,          // parent
-    fast_rand()
+    false             // was waiting
   });
 
   arena.push_back(startNode);
   OPEN.push(&arena.back());
-  const int NOT_VISITED = 0;
-  const int VISITED = 1;
 
   while (!OPEN.empty() && !is_expired(deadline)) {
     auto node = OPEN.top();
     OPEN.pop();
 
     const auto v = node->v;
-    int current_cost = calc_cost(node->collisions, node->g, node->d);
-    bool is_wait = (node->waiting_for != nullptr);
 
     if (CLOSED_gen[v->id] != current_gen) {
-      CLOSED_cost[v->id] = NOT_VISITED;
+      CLOSED_cost[v->id] = UNVISITED;
       CLOSED_gen[v->id] = current_gen;
     }
 
-    if (CLOSED_cost[v->id] == VISITED && !is_wait) continue;
-    CLOSED_cost[v->id] = VISITED;
+    // The Two-Lane Pareto Filter
+    if (node->was_waiting) {
+      // A wait node can only enter if the vertex is completely untouched
+      if (CLOSED_cost[v->id] != UNVISITED) continue;
+      CLOSED_cost[v->id] = VISITED_BY_WAIT;
+    } else {
+      // A move node can overwrite a wait node, but not another move node
+      if (CLOSED_cost[v->id] == VISITED_BY_MOVE) continue;
+      CLOSED_cost[v->id] = VISITED_BY_MOVE;
+    }
 
     if (v == ins->goals[i] ) {
       Path result;
       auto cur = node;
       while (cur != nullptr) {
         result.push_back(cur->v);
+
+        // Fill in the time gaps created by the wait macro-actions
+        if (cur->parent != nullptr) {
+          int time_gap = cur->g - cur->parent->g;
+          for (int w = 1; w < time_gap; ++w) {
+            result.push_back(cur->parent->v);
+          }
+        }
+
         cur = cur->parent;
       }
       std::reverse(result.begin(), result.end());
       return result;
     }
 
-    expand(node, i, s_i, cost_ub, arena, OPEN, fast_rand);
+    expand(node, i, s_i, cost_ub, arena, OPEN);
   }
-
+  std::cout << "failed to find path" << std::endl;
   return {};
 }
 
-template<typename OpenQueue, typename RandFunc>
+template<typename OpenQueue>
 void WaitScatter::expand(Node* node, int i, Vertex* s_i, int cost_ub,
-                         std::deque<Node>& arena, OpenQueue& OPEN, RandFunc& fast_rand)
+                         std::deque<Node>& arena, OpenQueue& OPEN)
 {
   const auto v = node->v;
   const auto time = node->g;
   const auto c_v = node->collisions;
-  const auto d_v = D->get(i, v);
 
-  // --- Wait node: restricted expansion ---
-  if (node->waiting_for != nullptr) {
-    if (node->wait_depth > MAX_WAIT) return;
-        
-    Vertex* target = node->waiting_for;
-    int new_wait_depth = node->wait_depth;
-
-    auto d_target = D->get(i, target);
-    if (d_target + time + 1 > cost_ub) { // margin exceeded
-      return;
-    }
-
-    // target is free, move there
-    if (CT.getCollisionCost(v, target, time) == 0) {
-      arena.push_back({target, time + 1, d_target,
-                       c_v,
-                       node, fast_rand()});
-      OPEN.push(&arena.back());
-      return;
-    }
-
-    // target still occupied, continue waiting
-    else { 
-      arena.push_back({v, time + 1, d_v,
-                        c_v + CT.getCollisionCost(v, v, time) * get_collision_factor(time),
-                        node, fast_rand(),
-                        target, new_wait_depth + 1});
-      OPEN.push(&arena.back());
-      return;
-    }
-  } // END of wait
-
-  // --- Normal node: expand spatial neighbors + per-collision wait nodes ---
   for (auto u : v->neighbor) {
     auto d_u = D->get(i, u);
     if (u != s_i && d_u + time + 1 <= cost_ub) {
       int step_collisions = CT.getCollisionCost(v, u, time);
-
       if (step_collisions > 0) {
-        // Create a wait node targeted at this colliding neighbor
-        if (d_u + time + 1 <= cost_ub) {
-          arena.push_back({v, time + 1, d_v,
-                           c_v + CT.getCollisionCost(v, v, time) * get_collision_factor(time),
-                           node, fast_rand(),
-                           u, 1});
-          OPEN.push(&arena.back());
+        // std::cout << "considering wait for vertex " << v->id << " at time " << time << std::endl;
+        // look-ahead: find earliest safe future time to move to u
+        for (int wait_steps = 1; wait_steps <= MAX_WAIT; ++wait_steps) {
+          int t_move = time + wait_steps;
+          if (CT.getCollisionCost(v, v, t_move - 1) > 0) break; // hit while idling
+          if (CT.getCollisionCost(v, u, t_move) == 0) {
+            if (d_u + t_move + 1 <= cost_ub) {
+              // std::cout << "Added wait for vertex " << v->id << " at time " << time << std::endl;
+              arena.push_back({u, t_move + 1, d_u,
+                               c_v,
+                               node, true});
+              arena.back().was_waiting = true;
+              OPEN.push(&arena.back());
+            }
+            break;
+          }
         }
       }
-
       arena.push_back({u, time + 1, d_u,
-                       c_v + step_collisions * get_collision_factor(time),
-                       node, fast_rand()});
-
+                        c_v + step_collisions,
+                        node, false});
       OPEN.push(&arena.back());
     }
   }

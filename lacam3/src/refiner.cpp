@@ -62,6 +62,7 @@ Solution refine(const Instance *ins, const Deadline *deadline,
     }
   }
 
+
   int cost_after = get_sum_of_loss_paths(paths);
   info(0, verbose, deadline, "refiner-", seed, "\tsum_of_loss: ", cost_before,
        " -> ", cost_after);

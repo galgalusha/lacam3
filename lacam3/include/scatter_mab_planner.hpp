@@ -28,6 +28,7 @@ struct ScatterConfig {
 struct EpochResult {
   bool success;
   int cost;
+  Solution plan;
 };
 
 // Fixed-size thread pool: threads are created once and reused.
@@ -140,8 +141,8 @@ struct ScatterMABPlanner {
   );
   ~ScatterMABPlanner();
   Solution solve();
-  void explore_scatters();
-  EpochResult run_epoch(int arm_id, IScatter *scatter, std::mt19937 &local_mt);
+  std::pair<Solution, Arm *> explore_scatters();
+  EpochResult run_epoch(int arm_id, IScatter *scatter, std::mt19937 &local_mt, int best_cost_so_far);
   bool set_new_config(HNode *S, LNode *M, Config &Q_to);
   HNode *create_highlevel_node(const Config &Q, HNode *parent);
   void rewrite(HNode *H_from, HNode *H_to);
@@ -150,7 +151,7 @@ struct ScatterMABPlanner {
   void apply_new_solution(const Solution &plan);
   void set_scatter();
   void set_pibt();
-  void set_refiner();
-  Solution get_refined_plan(const Solution &plan_origin);
+  void set_refiner(Solution& plan);
+  Solution get_refined_plan(const Solution plan_origin);
   void logging();
 };

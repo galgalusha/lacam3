@@ -7,8 +7,10 @@
 std::string ScatterMABPlanner::MSG;
 
 constexpr auto TIME_ZERO = std::chrono::seconds(0);
-static constexpr const int MIN_EPOCHS_PER_ARM = 5;
-static const std::vector<int> margins = {5, 10, 20, 40};
+static constexpr const int MIN_EPOCHS_PER_ARM = 10;
+static const std::vector<int> margins = {10, 10, 20, 20, 40, 40};
+// static const std::vector<int> margins = {5, 10, 20, 40};
+// static const std::vector<int> margins = {10, 20, 10, 20};
 static const int SCATTER_NUM = static_cast<int>(margins.size());
 
 
@@ -59,16 +61,18 @@ Solution ScatterMABPlanner::solve()
   LB = get_sum_of_costs_lower_bound(*ins, *D);
   info(1, verbose, deadline, "LB=", LB);
 
-  if (is_exploring) {
-    explore_scatters();
-    return Solution{};
-  }
+  auto [solution, winning_arm] = explore_scatters();
+
+  scatter = winning_arm->scatter;
+  int best_cost = get_sum_of_loss(solution);
+
+  set_refiner(solution);
 
   // insert initial node
   H_init = create_highlevel_node(ins->starts, nullptr);
   OPEN.push_front(H_init);
 
-  set_scatter();
+  // set_scatter();
   set_pibt();
 
   // search loop
@@ -78,11 +82,19 @@ Solution ScatterMABPlanner::solve()
     // check pooled procedures
     refiner_pool.remove_if([&](auto &proc) {
       if ((proc).wait_for(TIME_ZERO) != std::future_status::ready) return false;
-      apply_new_solution(proc.get());
+      auto new_solution = proc.get();
+      int new_solution_cost = new_solution.empty() ? -1 : get_sum_of_loss(new_solution);
+
+      if (new_solution.empty()) std::cout << "refiner solution empty" << std::endl;
+      else std::cout << "refiner solution cost:" << new_solution_cost << std::endl;
+      if (!new_solution.empty() && new_solution_cost < best_cost) {
+        solution = new_solution;
+        best_cost = new_solution_cost;
+      }
       ++seed_refiner;
       refiner_pool.emplace_back(std::async(std::launch::async,
                                            &ScatterMABPlanner::get_refined_plan, this,
-                                           backtrack(H_goal)));
+                                           solution));
       return true;
     });
 
@@ -103,12 +115,11 @@ Solution ScatterMABPlanner::solve()
     }
 
     // check goal condition
-    if (H_goal == nullptr && is_same_config(H->C, ins->goals)) {
+    if (H_goal == nullptr && is_same_config(H->C, ins->goals) && H->g < best_cost) {
       time_initial_solution = elapsed_ms(deadline);
       cost_initial_solution = H->g;
       H_goal = H;
       info(1, verbose, deadline, "found initial solution, cost: ", H_goal->g);
-      set_refiner();         // refining start
       continue;
     }
 
@@ -163,7 +174,7 @@ Solution ScatterMABPlanner::solve()
 
   // end processing
   logging();
-  auto solution = backtrack(H_goal);        // obtain solution
+  solution = H_goal == nullptr ? solution : backtrack(H_goal);        // obtain solution
   for (auto p : EXPLORED) delete p.second;  // memory management
   return solution;
 }
@@ -224,7 +235,7 @@ static std::pair<int, int> get_min_and_p90_costs(const std::vector<Arm> &arms)
 
 void print_arm_stats(const std::vector<Arm> &arms);
 
-void ScatterMABPlanner::explore_scatters()
+std::pair<Solution, Arm *> ScatterMABPlanner::explore_scatters()
 {
   // construct scatters in parallel
   auto scatter_deadline_ms = deadline->time_limit_ms / 3;
@@ -252,6 +263,7 @@ void ScatterMABPlanner::explore_scatters()
   std::mutex result_mutex;
   int total_runs = 0;
   int global_best_cost = INT_MAX;
+  Solution global_best_solution;
   int elimination_round = 1;
 
   // generate per-worker seeds deterministically
@@ -268,7 +280,7 @@ void ScatterMABPlanner::explore_scatters()
         arm_id = get_next_arm(arms);
       }
 
-      EpochResult result = run_epoch(arm_id, arms[arm_id].scatter, local_mt);
+      EpochResult result = run_epoch(arm_id, arms[arm_id].scatter, local_mt, global_best_cost);
 
       {
         std::lock_guard<std::mutex> lock(result_mutex);
@@ -278,6 +290,7 @@ void ScatterMABPlanner::explore_scatters()
           arms[arm_id].costs.push_back(result.cost);
           if (result.cost < global_best_cost) {
             global_best_cost = result.cost;
+            global_best_solution = std::move(result.plan);
             info(1, verbose, deadline, "[Arm ", arm_id, "] best cost update: ", global_best_cost);
           }
         }
@@ -303,6 +316,7 @@ void ScatterMABPlanner::explore_scatters()
       : *std::min_element(arms[winner].costs.begin(), arms[winner].costs.end());
   info(1, verbose, deadline, "winning arm: ", arms[winner].id,
        ", min cost: ", winner_min);
+  return {std::move(global_best_solution), &arms[winner]};
 }
 
 void print_arm_stats(const std::vector<Arm> &arms)
@@ -351,7 +365,7 @@ void print_arm_stats(const std::vector<Arm> &arms)
   }
 }
 
-EpochResult ScatterMABPlanner::run_epoch(int arm_id, IScatter *scatter, std::mt19937 &local_mt)
+EpochResult ScatterMABPlanner::run_epoch(int arm_id, IScatter *scatter, std::mt19937 &local_mt, int best_cost_so_far)
 {
   // thread-local search state
   std::deque<HNode *> OPEN;
@@ -367,6 +381,9 @@ EpochResult ScatterMABPlanner::run_epoch(int arm_id, IScatter *scatter, std::mt1
     }
     H_init = arms[arm_id].H_init;
   }
+
+  // auto init_h = heuristic->get(ins->starts);
+  // H_init = new HNode(ins->starts, D, nullptr, 0, init_h);;
 
   OPEN.push_back(H_init);
 
@@ -390,9 +407,11 @@ EpochResult ScatterMABPlanner::run_epoch(int arm_id, IScatter *scatter, std::mt1
 
     if (is_same_config(H->C, ins->goals)) {
       int cost = H->g;
+      Solution plan;
+      if (cost < best_cost_so_far) plan = backtrack(H);
       release_memory();
       info(4, verbose, deadline, "[Arm ", arm_id, "] reached goal. Cost: ", cost);
-      return {true, cost};
+      return {true, cost, std::move(plan)};
     }
 
     LNode *L;
@@ -608,11 +627,10 @@ void ScatterMABPlanner::set_pibt()
   }
 }
 
-void ScatterMABPlanner::set_refiner()
+void ScatterMABPlanner::set_refiner(Solution& plan)
 {
   if (!Params::FLG_REFINER) return;
   if (!Params::FLG_MULTI_THREAD) return;
-  auto plan = backtrack(H_goal);
   info(2, verbose, deadline, "invoke refiners");
   for (auto k = 0; k < Params::REFINER_NUM; ++k) {
     ++seed_refiner;
@@ -621,7 +639,7 @@ void ScatterMABPlanner::set_refiner()
   }
 }
 
-Solution ScatterMABPlanner::get_refined_plan(const Solution &plan)
+Solution ScatterMABPlanner::get_refined_plan(const Solution plan)
 {
   auto MT_internal = std::mt19937(seed_refiner);
   if (depth < 1 && plan.size() > 3 &&
@@ -636,17 +654,16 @@ Solution ScatterMABPlanner::get_refined_plan(const Solution &plan)
                             : deadline->time_limit_ms - elapsed_ms(deadline)));
     auto planner_tmp =
         ScatterMABPlanner(&ins_tmp, 0, &deadline_tmp, seed_refiner, depth + 1, D);
-    info(4, verbose, deadline, "refiner-", planner_tmp.seed,
+    info(1, verbose, deadline, "refiner-", planner_tmp.seed,
          "\tactivated (recursive LaCAM)");
     auto res = planner_tmp.solve();
     info(4, verbose, deadline, "refiner-", planner_tmp.seed,
          "\tcompleted (recursive LaCAM)");
     return res;
-  } else if (Params::RECURSIVE_RATE < 0.99) {
-    // iterative refinement
-    return refine(ins, deadline, plan, D, seed_refiner, verbose - 4);
   } else {
-    return Solution();
+    // iterative refinement
+    info(1, verbose, deadline, "invoked SIPP refiner");
+    return refine(ins, deadline, plan, D, seed_refiner, verbose - 4);
   }
 }
 

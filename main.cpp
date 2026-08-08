@@ -156,6 +156,9 @@ int main(int argc, char *argv[])
   Params::SCATTER_MAB = program.get<bool>("scatter-mab");
 
   // solve
+  std::cout << "FLG_MULTI_THREAD=" << Params::FLG_MULTI_THREAD
+            << " FLG_REFINER=" << Params::FLG_REFINER
+            << " REFINER_NUM=" << Params::REFINER_NUM << std::endl;
   const auto deadline = Deadline(time_limit_sec * 1000);
 
   Solution solution;
