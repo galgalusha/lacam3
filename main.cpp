@@ -73,7 +73,7 @@ int main(int argc, char *argv[])
       .default_value(std::string("4"));
   program.add_argument("--recursive-rate")
       .help("specify the rate of the recursive call of LaCAM")
-      .default_value(std::string("0.2"));
+      .default_value(std::string("0.6"));
   program.add_argument("--recursive-time-limit")
       .help("time limit (sec) of the recursive call")
       .default_value(std::string("1"));

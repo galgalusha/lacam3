@@ -57,7 +57,7 @@ struct Planner {
   std::list<std::future<std::pair<Solution, Refiner>>> refiner_pool;
 
   // for search utils
-  std::deque<HNode *> OPEN;
+  // std::deque<HNode *> OPEN;
   std::unordered_map<Config, HNode *, ConfigHasher> EXPLORED;
   HNode *H_init;  // start node
   HNode *H_goal;  // goal node

@@ -40,7 +40,6 @@ Planner::Planner(const Instance *_ins, int _verbose, const Deadline *_deadline,
       scatter(nullptr),
       seed_refiner(0),
       refiner_pool(),
-      OPEN(),
       EXPLORED(),
       H_init(nullptr),
       H_goal(nullptr),
@@ -66,13 +65,13 @@ Solution Planner::solve()
 
   // insert initial node
   H_init = create_highlevel_node(ins->starts, nullptr);
-  OPEN.push_front(H_init);
+  HNode* H = H_init;
 
   set_scatter();
   set_pibt();
 
   // search loop
-  while (!OPEN.empty() && !is_expired(deadline)) {
+  while (!is_expired(deadline)) {
     search_iter += 1;
     update_checkpoints();
 
@@ -87,19 +86,14 @@ Solution Planner::solve()
       return true;
     });
 
-    // do not pop here!
-    auto H = OPEN.front();
-
     // random insert after initial solution found
-    if (H_goal != nullptr && get_random_float(MT) < RANDOM_INSERT_PROB2) {
-      H = FLG_RANDOM_INSERT_INIT_NODE
-              ? H_init
-              : OPEN[get_random_int(MT, 0, OPEN.size() - 1)];
+    if (H_goal != nullptr && get_random_float(MT) < RANDOM_INSERT_PROB2) {      
+      H = H_init;
     }
 
     // check lower bounds
     if (H_goal != nullptr && H->f >= H_goal->f) {
-      OPEN.pop_front();
+      H = H_init;
       continue;
     }
 
@@ -117,7 +111,7 @@ Solution Planner::solve()
     // low level search
     auto L = H->get_next_lowlevel_node(MT);
     if (L == nullptr) {
-      OPEN.pop_front();
+      H = H->parent;
       continue;
     }
 
@@ -134,21 +128,20 @@ Solution Planner::solve()
       rewrite(H, iter->second, Refiner::LaCAM);
 
       if (get_random_float(MT) >= RANDOM_INSERT_PROB1) {
-        OPEN.push_front(iter->second);  // usual
+        H = iter->second;  // usual
       } else {
-        OPEN.push_front(H_init);  // sometimes
+        H = H_init;  // sometimes
       }
     } else {
       // new one -> insert
       auto H_new = create_highlevel_node(Q_to, H);
-      OPEN.push_front(H_new);
+      H = H_new;
     }
   }
 
   // clear pooled operaitons
-  bool is_optimal = OPEN.empty();
+  bool is_optimal = false;
   for (auto &proc : refiner_pool) apply_new_solution(proc.get());
-  if (is_optimal) OPEN.clear();
 
   // end processing
   update_checkpoints();
@@ -190,7 +183,6 @@ void Planner::apply_new_solution(const std::pair<Solution, Refiner> &result)
       auto g_val = H_from->g + get_edge_cost(H_from->C, Q);
       H_to = new HNode(Q, D, H_from, g_val, heuristic->get(Q));
       EXPLORED[Q] = H_to;
-      OPEN.push_front(H_to);
     }
     H_from = H_to;
   }
@@ -280,7 +272,6 @@ void Planner::rewrite(HNode *H_from, HNode *H_to, Refiner caller)
         n_to->f = n_to->g + n_to->h;
         n_to->parent = n_from;
         Q.push(n_to);
-        if (H_goal != nullptr && n_to->f < H_goal->f) OPEN.push_front(n_to);
       }
     }
   }
@@ -381,12 +372,8 @@ void Planner::logging()
   MSG += "\nnum_high_level_node=" + std::to_string(HNode::COUNT);
   MSG += "\nnum_low_level_node=" + std::to_string(LNode::COUNT);
 
-  if (H_goal != nullptr && OPEN.empty()) {
-    info(1, verbose, deadline, "solved optimally, cost:", H_goal->g);
-  } else if (H_goal != nullptr) {
+  if (H_goal != nullptr) {
     info(1, verbose, deadline, "solved sub-optimally, cost:", H_goal->g);
-  } else if (OPEN.empty()) {
-    info(1, verbose, deadline, "no solution");
   } else {
     info(1, verbose, deadline, "timeout");
   }
