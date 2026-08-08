@@ -1,4 +1,5 @@
 #include "../include/planner.hpp"
+#include "../include/wait_scatter.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -298,6 +299,7 @@ int Planner::get_edge_cost(const Config &C1, const Config &C2)
 
 void Planner::set_scatter()
 {
+  //if (!FLG_SCATTER || depth > 0) return;
   if (!FLG_SCATTER) return;
   info(1, verbose, deadline, "start computing SUO");
   auto scatter_deadline =
@@ -306,11 +308,8 @@ void Planner::set_scatter()
                    : (deadline->time_limit_ms - elapsed_ms(deadline)) / 2);
   auto margin = SCATTER_MARGIN < 0 ? get_random_int(MT, 0, 30) : SCATTER_MARGIN;
   scatter = new Scatter(ins, D, &scatter_deadline, 3, verbose - 4, margin);
-  scatter->construct(2);
-  info(1, verbose, deadline, "finish computing SUO",
-       ", collision count: ", scatter->CT.collision_cnt,
-       ", scatter margin: ", scatter->cost_margin,
-       ", sum_of_path_length: ", scatter->sum_of_path_length);
+  scatter->construct(5);
+  info(1, verbose, deadline, "finish computing Scatter");
 }
 
 void Planner::set_pibt()
