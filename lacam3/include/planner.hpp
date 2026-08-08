@@ -27,6 +27,8 @@
 #include "translator.hpp"
 #include "utils.hpp"
 
+enum class Refiner { LaCAM, RecursiveLaCAM, SIPP };
+
 struct Planner {
   const Instance *ins;
   const Deadline *deadline;
@@ -52,7 +54,7 @@ struct Planner {
 
   // for refiner
   int seed_refiner;
-  std::list<std::future<Solution>> refiner_pool;
+  std::list<std::future<std::pair<Solution, Refiner>>> refiner_pool;
 
   // for search utils
   std::deque<HNode *> OPEN;
@@ -96,14 +98,14 @@ struct Planner {
   Solution solve();
   bool set_new_config(HNode *S, LNode *M, Config &Q_to);
   HNode *create_highlevel_node(const Config &Q, HNode *parent);
-  void rewrite(HNode *H_from, HNode *H_to);
+  void rewrite(HNode *H_from, HNode *H_to, Refiner caller);
   int get_edge_cost(const Config &C1, const Config &C2);
   Solution backtrack(HNode *H);
-  void apply_new_solution(const Solution &plan);
+  void apply_new_solution(const std::pair<Solution, Refiner> &result);
   void set_scatter();
   void set_pibt();
   void set_refiner();
-  Solution get_refined_plan(const Solution &plan_origin);
+  std::pair<Solution, Refiner> get_refined_plan(const Solution &plan_origin);
   void update_checkpoints();
   void logging();
 };

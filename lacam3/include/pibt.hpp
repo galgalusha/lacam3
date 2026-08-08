@@ -33,15 +33,15 @@ struct PIBT {
   bool flg_swap;
 
   // scatter
-  Scatter *scatter;
+  IScatter *scatter;
 
   PIBT(const Instance *_ins, DistTable *_D, int seed = 0, bool _flg_swap = true,
-       Scatter *_scatter = nullptr);
+       IScatter *_scatter = nullptr);
   ~PIBT();
 
   bool set_new_config(const Config &Q_from, Config &Q_to,
-                      const std::vector<int> &order);
-  bool funcPIBT(const int i, const Config &Q_from, Config &Q_to);
+                      const std::vector<int> &order, int time);
+  bool funcPIBT(const int i, const Config &Q_from, Config &Q_to, int time);
   int is_swap_required_and_possible(const int ai, const Config &Q_from,
                                     Config &Q_to);
   bool is_swap_required(const int pusher, const int puller,

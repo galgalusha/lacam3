@@ -1,7 +1,7 @@
 #include "../include/pibt.hpp"
 
 PIBT::PIBT(const Instance *_ins, DistTable *_D, int seed, bool _flg_swap,
-           Scatter *_scatter)
+           IScatter *_scatter)
     : ins(_ins),
       MT(std::mt19937(seed)),
       N(ins->N),
@@ -20,7 +20,7 @@ PIBT::PIBT(const Instance *_ins, DistTable *_D, int seed, bool _flg_swap,
 PIBT::~PIBT() {}
 
 bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
-                          const std::vector<int> &order)
+                          const std::vector<int> &order, int time)
 {
   bool success = true;
   // setup cache & constraints check
@@ -47,7 +47,7 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
 
   if (success) {
     for (auto i : order) {
-      if (Q_to[i] == nullptr && !funcPIBT(i, Q_from, Q_to)) {
+      if (Q_to[i] == nullptr && !funcPIBT(i, Q_from, Q_to, time)) {
         success = false;
         break;
       }
@@ -63,17 +63,14 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
   return success;
 }
 
-bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
+bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to, int time)
 {
   const auto K = Q_from[i]->neighbor.size();
 
   // exploit scatter data
   Vertex *prioritized_vertex = nullptr;
   if (scatter != nullptr) {
-    auto itr_s = scatter->scatter_data[i].find(Q_from[i]->id);
-    if (itr_s != scatter->scatter_data[i].end()) {
-      prioritized_vertex = itr_s->second;
-    }
+    prioritized_vertex = scatter->get_neighbor(time, i, Q_from[i]->id);
   }
 
   // set C_next
@@ -132,7 +129,7 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
 
     // priority inheritance
     if (j != NO_AGENT && u != Q_from[i] && Q_to[j] == nullptr &&
-        !funcPIBT(j, Q_from, Q_to))
+        !funcPIBT(j, Q_from, Q_to, time))
       continue;
 
     // success to plan next one step

@@ -130,7 +130,7 @@ Solution Planner::solve()
     auto iter = EXPLORED.find(Q_to);
     if (iter != EXPLORED.end()) {
       // known configuration
-      rewrite(H, iter->second);
+      rewrite(H, iter->second, Refiner::LaCAM);
 
       if (get_random_float(MT) >= RANDOM_INSERT_PROB1) {
         OPEN.push_front(iter->second);  // usual
@@ -167,8 +167,10 @@ HNode *Planner::create_highlevel_node(const Config &Q, HNode *parent)
   return H_new;
 }
 
-void Planner::apply_new_solution(const Solution &plan)
+void Planner::apply_new_solution(const std::pair<Solution, Refiner> &result)
 {
+  const auto &plan = result.first;
+  const auto caller = result.second;
   if (plan.empty()) return;
   info(3, verbose, deadline, "incorporate new solution");
 
@@ -181,7 +183,7 @@ void Planner::apply_new_solution(const Solution &plan)
     if (iter != EXPLORED.end()) {
       // known
       H_to = iter->second;
-      rewrite(H_from, H_to);
+      rewrite(H_from, H_to, caller);
     } else {
       // new
       auto g_val = H_from->g + get_edge_cost(H_from->C, Q);
@@ -205,6 +207,12 @@ Solution Planner::backtrack(HNode *H)
   return plan;
 }
 
+int get_depth(HNode *H) {
+  int depth = 0;
+  while (H->parent != nullptr) { H = H->parent; depth++; }
+  return depth;
+}
+
 bool Planner::set_new_config(HNode *H, LNode *L, Config &Q_to)
 {
   // worker-id, time -> configuration
@@ -216,7 +224,7 @@ bool Planner::set_new_config(HNode *H, LNode *L, Config &Q_to)
     // set constraints
     for (auto d = 0; d < L->depth; ++d) Q_cands[k][L->who[d]] = L->where[d];
     // PIBT
-    auto res = pibts[k]->set_new_config(H->C, Q_cands[k], H->order);
+    auto res = pibts[k]->set_new_config(H->C, Q_cands[k], H->order, get_depth(H));
     if (res)
       f_vals[k] = get_edge_cost(H->C, Q_cands[k]) + heuristic->get(Q_cands[k]);
   };
@@ -247,7 +255,7 @@ bool Planner::set_new_config(HNode *H, LNode *L, Config &Q_to)
   }
 }
 
-void Planner::rewrite(HNode *H_from, HNode *H_to)
+void Planner::rewrite(HNode *H_from, HNode *H_to, Refiner caller)
 {
   // update neighbors
   H_from->neighbor.insert(H_to);
@@ -260,8 +268,13 @@ void Planner::rewrite(HNode *H_from, HNode *H_to)
     for (auto n_to : n_from->neighbor) {
       auto g_val = n_from->g + get_edge_cost(n_from->C, n_to->C);
       if (g_val < n_to->g) {
-        if (n_to == H_goal)
-          info(2, verbose, deadline, "cost update: ", H_goal->g, " -> ", g_val);
+        if (n_to == H_goal) {
+          const char *name = caller == Refiner::LaCAM          ? "LaCAM"
+                             : caller == Refiner::RecursiveLaCAM ? "Recursive LaCAM"
+                                                                  : "SIPP";
+          info(2, verbose, deadline, "cost update [", name, "]: ", H_goal->g,
+               " -> ", g_val);
+        }
         n_to->g = g_val;
         n_to->f = n_to->g + n_to->h;
         n_to->parent = n_from;
@@ -293,7 +306,7 @@ void Planner::set_scatter()
                    : (deadline->time_limit_ms - elapsed_ms(deadline)) / 2);
   auto margin = SCATTER_MARGIN < 0 ? get_random_int(MT, 0, 30) : SCATTER_MARGIN;
   scatter = new Scatter(ins, D, &scatter_deadline, 3, verbose - 4, margin);
-  scatter->construct();
+  scatter->construct(2);
   info(1, verbose, deadline, "finish computing SUO",
        ", collision count: ", scatter->CT.collision_cnt,
        ", scatter margin: ", scatter->cost_margin,
@@ -320,7 +333,7 @@ void Planner::set_refiner()
   }
 }
 
-Solution Planner::get_refined_plan(const Solution &plan)
+std::pair<Solution, Refiner> Planner::get_refined_plan(const Solution &plan)
 {
   auto MT_internal = std::mt19937(seed_refiner);
   if (depth < 1 && plan.size() > 3 &&
@@ -340,12 +353,12 @@ Solution Planner::get_refined_plan(const Solution &plan)
     auto res = planner_tmp.solve();
     info(4, verbose, deadline, "refiner-", planner_tmp.seed,
          "\tcompleted (recursive LaCAM)");
-    return res;
+    return {res, Refiner::RecursiveLaCAM};
   } else if (RECURSIVE_RATE < 1.0) {
     // iterative refinement
-    return refine(ins, deadline, plan, D, seed_refiner, verbose - 4);
+    return {refine(ins, deadline, plan, D, seed_refiner, verbose - 4), Refiner::SIPP};
   } else {
-    return Solution();
+    return {Solution(), Refiner::SIPP};
   }
 }
 
