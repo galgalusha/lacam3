@@ -60,11 +60,18 @@ Planner::Planner(const Instance *_ins, int _verbose, const Deadline *_deadline,
 Planner::~Planner()
 {
   if (heuristic != nullptr) delete heuristic;
-  // cached scatters are owned by ScatterMAB; only delete if we created it ourselves
-  if (scatter != nullptr && refiners_scatter_mab.get_cached(arm_idx, ins->starts) != scatter)
-    delete scatter;
+  if (scatter != nullptr) {
+    auto &mab = (depth == 0) ? main_scatter_mab : refiners_scatter_mab;
+    if (mab.get_cached(arm_idx, ins->starts) != scatter) delete scatter;
+  }
   for (auto &pibt : pibts) delete pibt;
   if (delete_dist_table_after_used) delete D;
+}
+
+int get_depth(HNode *H) {
+  int depth = 0;
+  while (H->parent != nullptr) { H = H->parent; depth++; }
+  return depth;
 }
 
 Solution Planner::solve()
@@ -81,6 +88,23 @@ Solution Planner::solve()
 
   int pibt_deadlock_attempts = PIBT_DEADLOCK_ATTEMPTS;
   int pibt_livelock_attempts = PIBT_LIVELOCK_ATTEMPTS;
+  int restart_count = 0;
+
+  auto do_restart = [&]() {
+    pibt_deadlock_attempts = PIBT_DEADLOCK_ATTEMPTS;
+    pibt_livelock_attempts = PIBT_LIVELOCK_ATTEMPTS;
+    restart_count++;
+    H = H_init;
+    int new_arm = main_scatter_mab.choose_ready_arm(ins->starts);
+    if (new_arm >= 0) {
+      arm_idx = new_arm;
+      scatter = main_scatter_mab.get_cached(arm_idx, ins->starts);
+      for (auto &pibt : pibts) pibt->scatter = scatter;
+      main_scatter_mab.record_pull(arm_idx);
+      info(2, verbose, deadline, "restart with arm", arm_idx,
+           main_scatter_mab.arms[arm_idx].config.str());
+    }
+  };
 
   // search loop
   while (!is_expired(deadline)) {
@@ -101,10 +125,7 @@ Solution Planner::solve()
     // check lower bounds
     if (H_goal != nullptr && H->f >= H_goal->f) {
       if (depth > 0) break;
-      // restart
-      pibt_deadlock_attempts = PIBT_DEADLOCK_ATTEMPTS;
-      pibt_livelock_attempts = PIBT_LIVELOCK_ATTEMPTS;
-      H = H_init;
+      do_restart();
       continue;
     }
 
@@ -128,17 +149,15 @@ Solution Planner::solve()
 
     // create successors at the high-level search
     auto Q_to = Config(N, nullptr);
-    auto res = set_new_config(H, L, Q_to);
+    bool res = set_new_config(H, L, Q_to);
+
     delete L;
 
     // failed? retry
     if (!res) {
       if (--pibt_deadlock_attempts == 0) {
         if (depth > 0) break;
-        // restart
-        pibt_deadlock_attempts = PIBT_DEADLOCK_ATTEMPTS;
-        pibt_livelock_attempts = PIBT_LIVELOCK_ATTEMPTS;
-        H = H_init;
+        do_restart();
       }
       continue;
     };
@@ -153,15 +172,12 @@ Solution Planner::solve()
       if (f >= iter->second->f) {
         if (--pibt_livelock_attempts == 0) {
           if (depth > 0) break;
-          // restart
-          pibt_deadlock_attempts = PIBT_DEADLOCK_ATTEMPTS;
-          pibt_livelock_attempts = PIBT_LIVELOCK_ATTEMPTS;
-          H = H_init;
+          do_restart();
           continue;
         }
       }
       // known configuration
-      rewrite(H, iter->second, Refiner::LaCAM);
+      rewrite(H, iter->second, Refiner::LaCAM, arm_idx);
       H = iter->second;
     } else {
       // new one -> insert
@@ -231,12 +247,6 @@ Solution Planner::backtrack(HNode *H)
   return plan;
 }
 
-int get_depth(HNode *H) {
-  int depth = 0;
-  while (H->parent != nullptr) { H = H->parent; depth++; }
-  return depth;
-}
-
 bool Planner::set_new_config(HNode *H, LNode *L, Config &Q_to)
 {
   // worker-id, time -> configuration
@@ -300,6 +310,8 @@ void Planner::rewrite(HNode *H_from, HNode *H_to, Refiner caller, int arm_idx)
                " -> ", g_val);
           if (caller == Refiner::RecursiveLaCAM && arm_idx >= 0)
             refiners_scatter_mab.record_improvement(arm_idx);
+          else if (caller == Refiner::LaCAM && arm_idx >= 0)
+            main_scatter_mab.record_improvement(arm_idx);
         }
         n_to->g = g_val;
         n_to->f = n_to->g + n_to->h;
@@ -326,36 +338,46 @@ void Planner::set_scatter()
   if (!FLG_SCATTER) return;
   info(1, verbose, deadline, "start computing SUO");
   auto scatter_deadline =
-      Deadline(deadline == nullptr
+      new Deadline(deadline == nullptr
                    ? INT_MAX
                    : (deadline->time_limit_ms - elapsed_ms(deadline)) / 2);
 
   if (depth > 0) {
-    //
-    // Refiner. Use MAB
-    //
     auto &chosen_arm = refiners_scatter_mab.arms[arm_idx >= 0 ? arm_idx : 0];
     scatter = refiners_scatter_mab.get_cached(arm_idx, ins->starts);
     if (scatter == nullptr) {
       auto arm_margin = chosen_arm.config.margin;
       if (chosen_arm.config.scatter_type == ST_Scatter) {
-        scatter = new Scatter(ins, D, &scatter_deadline, 3, verbose - 4, arm_margin);
+        scatter = new Scatter(ins, D, scatter_deadline, 3, verbose - 4, arm_margin);
       } else {
-        scatter = new WaitScatter(ins, D, &scatter_deadline, 3, verbose - 4, arm_margin);
+        scatter = new WaitScatter(ins, D, scatter_deadline, 3, verbose - 4, arm_margin);
       }
       scatter->construct(5);
       refiners_scatter_mab.set_cached(arm_idx, ins->starts, scatter);
     }
 
   } else {
-    //
-    // Main thread
-    //
-    scatter = new WaitScatter(ins, D, &scatter_deadline, 3, verbose - 4, SCATTER_MARGIN);
-    scatter->construct(5);
+    int time_limit = deadline->time_limit_ms;
+    std::vector<std::thread> workers;
+    for (int i = 0; i < (int)main_scatter_mab.arms.size(); ++i) {
+      auto dl = new Deadline(deadline->time_limit_ms);
+      workers.emplace_back([this, i, dl]() {
+        auto &arm = main_scatter_mab.arms[i];
+        IScatter *s;
+        if (arm.config.scatter_type == ST_Scatter)
+          s = new Scatter(ins, D, dl, 3, verbose - 4, arm.config.margin);
+        else
+          s = new WaitScatter(ins, D, dl, 3, verbose - 4, arm.config.margin);
+        s->construct(5);
+        std::cout << "elapsed: " << dl->elapsed_ms() << "ms\tfinished " << arm.config.str() << std::endl;
+        main_scatter_mab.set_cached(i, ins->starts, s);
+      });
+    }
+    for (auto &w : workers) w.join();
 
+    arm_idx = main_scatter_mab.choose_arm();
+    scatter = main_scatter_mab.get_cached(arm_idx, ins->starts);
   }
-
 
   info(1, verbose, deadline, "finish computing Scatter");
 }

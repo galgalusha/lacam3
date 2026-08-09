@@ -65,6 +65,20 @@ int ScatterMAB::choose_arm()
   return best;
 }
 
+int ScatterMAB::choose_ready_arm(const Config &starts)
+{
+  std::lock_guard<std::mutex> lock(mtx);
+  int tp = std::max(1, total_pulls);
+  int best = -1;
+  float best_score = -1.0f;
+  for (int i = 0; i < static_cast<int>(arms.size()); ++i) {
+    if (cache[i].find(starts) == cache[i].end()) continue;
+    float s = arms[i].get_score(tp);
+    if (s > best_score) { best_score = s; best = i; }
+  }
+  return best;
+}
+
 void ScatterMAB::record_pull(int arm_idx)
 {
   std::lock_guard<std::mutex> lock(mtx);
@@ -98,14 +112,14 @@ void ScatterMAB::set_cached(int arm_idx, const Config &starts, IScatter *scatter
 
 ScatterMAB main_scatter_mab({
   {ST_Scatter    , 10},
-  {ST_Scatter    , 90},
   {ST_WaitScatter, 20},
   {ST_WaitScatter, 45},
+  {ST_Scatter,     45},
 });
 
 ScatterMAB refiners_scatter_mab({
   {ST_WaitScatter, 10},
   {ST_WaitScatter, 20},
   {ST_Scatter    , 40},
-  {ST_Scatter    , 90},
+//   {ST_Scatter    , 90},
 });

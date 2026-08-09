@@ -44,6 +44,7 @@ struct ScatterMAB {
   ~ScatterMAB();
 
   int choose_arm();
+  int choose_ready_arm(const Config &starts);  // only considers arms with a cached scatter
   void record_pull(int arm_idx);
   void record_improvement(int arm_idx);
   IScatter *get_cached(int arm_idx, const Config &starts);
