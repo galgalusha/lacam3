@@ -23,6 +23,9 @@ std::string Planner::MSG;
 int Planner::CHECKPOINTS_DURATION = 5000;
 constexpr int CHECKPOINTS_NIL = -1;
 
+const int PIBT_DEADLOCK_ATTEMPTS = 150;
+const int PIBT_LIVELOCK_ATTEMPTS = 150;
+
 constexpr auto TIME_ZERO = std::chrono::seconds(0);
 
 enum ScatterType { ST_Scatter, ST_WaitScatter };
@@ -62,7 +65,8 @@ struct Arm {
 static std::vector<Arm> arms = {
   Arm(ST_WaitScatter, 10),
   Arm(ST_WaitScatter, 20),
-  Arm(ST_Scatter, 40),
+  Arm(ST_Scatter    , 40),
+  Arm(ST_Scatter    , 90),
 };
 
 static std::mutex mab_mutex;
@@ -133,6 +137,9 @@ Solution Planner::solve()
   set_scatter();
   set_pibt();
 
+  int pibt_deadlock_attempts = PIBT_DEADLOCK_ATTEMPTS;
+  int pibt_livelock_attempts = PIBT_LIVELOCK_ATTEMPTS;
+
   // search loop
   while (!is_expired(deadline)) {
     search_iter += 1;
@@ -149,13 +156,14 @@ Solution Planner::solve()
       return true;
     });
 
-    // random insert after initial solution found
-    if (H_goal != nullptr && get_random_float(MT) < RANDOM_INSERT_PROB2) {      
-      H = H_init;
-    }
+    // // random insert after initial solution found
+    // if (H_goal != nullptr && get_random_float(MT) < RANDOM_INSERT_PROB2) {      
+    //   H = H_init;
+    // }
 
     // check lower bounds
     if (H_goal != nullptr && H->f >= H_goal->f) {
+      if (depth > 0) break;
       H = H_init;
       continue;
     }
@@ -166,7 +174,7 @@ Solution Planner::solve()
       cost_initial_solution = H->g;
       H_goal = H;
       info(1, verbose, deadline, "found initial solution, cost: ", H_goal->g);
-      if (!FLG_STAR) break;  // finish search
+      if (!FLG_STAR || depth > 0) break;  // finish search
       set_refiner();         // refining start
       continue;
     }
@@ -182,19 +190,39 @@ Solution Planner::solve()
     auto Q_to = Config(N, nullptr);
     auto res = set_new_config(H, L, Q_to);
     delete L;
-    if (!res) continue;
+
+    // failed? retry
+    if (!res) {
+      if (--pibt_deadlock_attempts == 0) {
+        if (depth > 0) break;
+        // restart
+        pibt_deadlock_attempts = PIBT_DEADLOCK_ATTEMPTS;
+        pibt_livelock_attempts = PIBT_LIVELOCK_ATTEMPTS;
+        H = H_init;
+      }
+      continue;
+    };
 
     // check explored list
     auto iter = EXPLORED.find(Q_to);
+
     if (iter != EXPLORED.end()) {
+      auto g = (H->parent == nullptr) ? 0 : H->parent->g + get_edge_cost(H->parent->C, Q_to);
+      auto h = heuristic->get(Q_to);
+      auto f = g + h;
+      if (f >= iter->second->f) {
+        if (--pibt_livelock_attempts == 0) {
+          if (depth > 0) break;
+          // restart
+          pibt_deadlock_attempts = PIBT_DEADLOCK_ATTEMPTS;
+          pibt_livelock_attempts = PIBT_LIVELOCK_ATTEMPTS;
+          H = H_init;
+          continue;
+        }
+      }
       // known configuration
       rewrite(H, iter->second, Refiner::LaCAM);
-
-      if (get_random_float(MT) >= RANDOM_INSERT_PROB1) {
-        H = iter->second;  // usual
-      } else {
-        H = H_init;  // sometimes
-      }
+      H = iter->second;
     } else {
       // new one -> insert
       auto H_new = create_highlevel_node(Q_to, H);
@@ -395,6 +423,7 @@ void Planner::set_pibt()
 
 void Planner::set_refiner()
 {
+  if (depth > 0) return;
   if (!FLG_REFINER) return;
   if (!FLG_MULTI_THREAD) return;
   auto plan = backtrack(H_goal);
