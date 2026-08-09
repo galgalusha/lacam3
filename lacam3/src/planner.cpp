@@ -1,4 +1,5 @@
 #include "../include/planner.hpp"
+#include "../include/metrics.hpp"
 #include "../include/wait_scatter.hpp"
 
 #include <algorithm>
@@ -24,6 +25,86 @@ constexpr int CHECKPOINTS_NIL = -1;
 
 constexpr auto TIME_ZERO = std::chrono::seconds(0);
 
+enum ScatterType { ST_Scatter, ST_WaitScatter };
+
+#include <vector>
+#include <cmath>
+#include <algorithm>
+#include <limits>
+#include <mutex>
+
+static std::vector<float> PATH_RATIO = { 0.6, 0.55, 0.5, 0.45, 0.4 };
+
+struct Arm {
+  ScatterType scatter_type;
+  int margin;
+  std::vector<int> improvements;
+  int pulls;
+  int idx_path_ratio;
+
+
+  Arm(ScatterType _st, int _margin) : scatter_type(_st), margin(_margin), pulls(0), idx_path_ratio(0) {}
+
+  float get_path_ratio() {
+    float ratio = PATH_RATIO[idx_path_ratio];
+    idx_path_ratio = (idx_path_ratio + 1) % PATH_RATIO.size();
+    return ratio;
+  }
+
+  float get_score(int total_pulls, int p90_improvement) const {
+    if (pulls == 0) return 1.0f; 
+    if (p90_improvement == 0) return 0.0f;
+
+    float total_rewards = 0.0f;
+    float p90_float = static_cast<float>(p90_improvement);
+
+    for (int improv : improvements) {
+        total_rewards += std::max(1.0f, static_cast<float>(improv) / p90_float) / p90_float;
+    }
+    float avg = total_rewards / static_cast<float>(pulls);
+    float exploration = std::sqrt(2.0f * std::log(static_cast<float>(total_pulls)) / static_cast<float>(pulls));
+    return avg + exploration;
+  }
+};
+
+static std::vector<Arm> arms = {
+  Arm(ST_WaitScatter, 10),
+  Arm(ST_WaitScatter, 20),
+  Arm(ST_Scatter, 40),
+};
+
+static std::mutex mab_mutex;
+static int mab_total_pulls = 0;
+
+static int choose_arm()
+{
+  std::lock_guard<std::mutex> lock(mab_mutex);
+
+  // compute p90 percentile of improvements across all arms
+  std::vector<int> all_improvements;
+  for (auto &arm : arms)
+    for (int imp : arm.improvements) all_improvements.push_back(imp);
+  int p90 = 0;
+  if (!all_improvements.empty()) {
+    std::sort(all_improvements.begin(), all_improvements.end());
+    int idx = static_cast<int>(0.9f * (all_improvements.size() - 1));
+    p90 = all_improvements[idx];
+  }
+
+  int total_pulls = std::max(1, mab_total_pulls);
+  int best_arm = 0;
+  float best_score = -1.0f;
+  std::cout << "Arm Scores: ";
+  for (int i = 0; i < static_cast<int>(arms.size()); ++i) {
+    float score = arms[i].get_score(total_pulls, p90);
+    std::cout << " [" << i << "] " << score;
+    if (score > best_score) { best_score = score; best_arm = i; }
+  }
+  std::cout << std::endl;
+  return best_arm;
+}
+
+
 Planner::Planner(const Instance *_ins, int _verbose, const Deadline *_deadline,
                  int _seed, int _depth, DistTable *_D)
     : ins(_ins),
@@ -43,6 +124,7 @@ Planner::Planner(const Instance *_ins, int _verbose, const Deadline *_deadline,
       EXPLORED(),
       H_init(nullptr),
       H_goal(nullptr),
+      arm_idx(-1),
       search_iter(0),
       time_initial_solution(-1),
       cost_initial_solution(-1),
@@ -290,16 +372,36 @@ int Planner::get_edge_cost(const Config &C1, const Config &C2)
 
 void Planner::set_scatter()
 {
-  //if (!FLG_SCATTER || depth > 0) return;
   if (!FLG_SCATTER) return;
   info(1, verbose, deadline, "start computing SUO");
   auto scatter_deadline =
       Deadline(deadline == nullptr
                    ? INT_MAX
                    : (deadline->time_limit_ms - elapsed_ms(deadline)) / 2);
-  auto margin = SCATTER_MARGIN < 0 ? get_random_int(MT, 0, 30) : SCATTER_MARGIN;
-  scatter = new Scatter(ins, D, &scatter_deadline, 3, verbose - 4, margin);
-  scatter->construct(5);
+
+  if (depth > 0) {
+    //
+    // Refiner. Use MAB
+    //
+    auto &chosen_arm = arms[arm_idx >= 0 ? arm_idx : 0];
+    auto arm_margin = chosen_arm.margin;
+    if (chosen_arm.scatter_type == ST_Scatter) {
+      scatter = new Scatter(ins, D, &scatter_deadline, 3, verbose - 4, arm_margin);
+    } else {
+      scatter = new WaitScatter(ins, D, &scatter_deadline, 3, verbose - 4, arm_margin);
+    }
+    scatter->construct(5);
+   
+  } else {
+    //
+    // Main thread
+    //
+    scatter = new WaitScatter(ins, D, &scatter_deadline, 3, verbose - 4, SCATTER_MARGIN);
+    scatter->construct(5);
+
+  }
+
+
   info(1, verbose, deadline, "finish computing Scatter");
 }
 
@@ -329,20 +431,46 @@ std::pair<Solution, Refiner> Planner::get_refined_plan(const Solution &plan)
   if (depth < 1 && plan.size() > 3 &&
       get_random_float(MT_internal) < RECURSIVE_RATE) {
     // recursive LaCAM
+    int chosen_arm_idx = choose_arm();
+    float path_ratio = arms[chosen_arm_idx].get_path_ratio();
+    int insert_idx = static_cast<int>(path_ratio * static_cast<float>(plan.size() - 1));
+    insert_idx = std::max(1, std::min(insert_idx, static_cast<int>(plan.size()) - 2));
     auto ins_tmp =
-        Instance(ins->G, plan[get_random_int(MT_internal, 1, plan.size() - 2)],
-                 ins->goals, N);
+        Instance(ins->G, plan[insert_idx], ins->goals, N);
     auto deadline_tmp = Deadline(std::min(
         RECURSIVE_TIME_LIMIT,
         deadline == nullptr ? INT_MAX
                             : deadline->time_limit_ms - elapsed_ms(deadline)));
     auto planner_tmp =
         Planner(&ins_tmp, 0, &deadline_tmp, seed_refiner, depth + 1, D);
+    planner_tmp.arm_idx = chosen_arm_idx;
     info(4, verbose, deadline, "refiner-", planner_tmp.seed,
          "\tactivated (recursive LaCAM)");
     auto res = planner_tmp.solve();
     info(4, verbose, deadline, "refiner-", planner_tmp.seed,
          "\tcompleted (recursive LaCAM)");
+    {
+      std::lock_guard<std::mutex> lock(mab_mutex);
+      ++arms[chosen_arm_idx].pulls;
+      ++mab_total_pulls;
+      // res covers plan[insert_idx..end]; add back the omitted prefix cost
+      auto prefix = Solution(plan.begin(), plan.begin() + insert_idx + 1);
+      int full_res_cost = res.empty() ? INT_MAX : get_sum_of_loss(prefix, ins->goals) + get_sum_of_loss(res);
+      if (res.empty() || full_res_cost >= get_sum_of_loss(plan)) {
+        arms[chosen_arm_idx].improvements.push_back(0);
+        std::cout << "ARM margin=" << arms[chosen_arm_idx].margin
+                  << " type=" << arms[chosen_arm_idx].scatter_type
+                  << " path_ratio=" << path_ratio
+                  << " - no improvement. full res cost: " << full_res_cost << std::endl;
+      } else {
+        int improvement = get_sum_of_loss(plan) - full_res_cost;
+        arms[chosen_arm_idx].improvements.push_back(improvement);
+        std::cout << "ARM margin=" << arms[chosen_arm_idx].margin
+                  << " type=" << arms[chosen_arm_idx].scatter_type
+                  << " path_ratio=" << path_ratio
+                  << " - improvement = " << improvement << std::endl;
+      }
+    }
     return {res, Refiner::RecursiveLaCAM};
   } else if (RECURSIVE_RATE < 1.0) {
     // iterative refinement

@@ -84,6 +84,8 @@ struct Planner {
   static int CHECKPOINTS_DURATION;
   static std::string MSG;
 
+  int arm_idx;  // MAB arm index for recursive LaCAM (-1 = unset)
+
   int search_iter;
   int time_initial_solution;
   int cost_initial_solution;

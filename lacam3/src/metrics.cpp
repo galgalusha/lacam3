@@ -88,6 +88,21 @@ int get_sum_of_loss(const Solution &solution)
   return c;
 }
 
+int get_sum_of_loss(const Solution &solution, const Config& goal)
+{
+  if (solution.empty()) return 0;
+  int c = 0;
+  const auto N = solution.front().size();
+  const auto T = solution.size();
+  for (size_t i = 0; i < N; ++i) {
+    auto g = goal[i];
+    for (size_t t = 1; t < T; ++t) {
+      if (solution[t - 1][i] != g || solution[t][i] != g) ++c;
+    }
+  }
+  return c;
+}
+
 int get_sum_of_loss_paths(const std::vector<Path> &solution)
 {
   auto c = 0;
