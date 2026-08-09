@@ -38,12 +38,12 @@ static std::vector<float> PATH_RATIO = { 0.6, 0.55, 0.5, 0.45, 0.4 };
 struct Arm {
   ScatterType scatter_type;
   int margin;
-  std::vector<int> improvements;
+  int improvement_count;
   int pulls;
   int idx_path_ratio;
 
 
-  Arm(ScatterType _st, int _margin) : scatter_type(_st), margin(_margin), pulls(0), idx_path_ratio(0) {}
+  Arm(ScatterType _st, int _margin) : scatter_type(_st), margin(_margin), improvement_count(0), pulls(0), idx_path_ratio(0) {}
 
   float get_path_ratio() {
     float ratio = PATH_RATIO[idx_path_ratio];
@@ -51,17 +51,9 @@ struct Arm {
     return ratio;
   }
 
-  float get_score(int total_pulls, int p90_improvement) const {
-    if (pulls == 0) return 1.0f; 
-    if (p90_improvement == 0) return 0.0f;
-
-    float total_rewards = 0.0f;
-    float p90_float = static_cast<float>(p90_improvement);
-
-    for (int improv : improvements) {
-        total_rewards += std::max(1.0f, static_cast<float>(improv) / p90_float) / p90_float;
-    }
-    float avg = total_rewards / static_cast<float>(pulls);
+  float get_score(int total_pulls) const {
+    if (pulls == 0) return std::numeric_limits<float>::infinity();
+    float avg = static_cast<float>(improvement_count) / static_cast<float>(pulls);
     float exploration = std::sqrt(2.0f * std::log(static_cast<float>(total_pulls)) / static_cast<float>(pulls));
     return avg + exploration;
   }
@@ -80,23 +72,12 @@ static int choose_arm()
 {
   std::lock_guard<std::mutex> lock(mab_mutex);
 
-  // compute p90 percentile of improvements across all arms
-  std::vector<int> all_improvements;
-  for (auto &arm : arms)
-    for (int imp : arm.improvements) all_improvements.push_back(imp);
-  int p90 = 0;
-  if (!all_improvements.empty()) {
-    std::sort(all_improvements.begin(), all_improvements.end());
-    int idx = static_cast<int>(0.9f * (all_improvements.size() - 1));
-    p90 = all_improvements[idx];
-  }
-
   int total_pulls = std::max(1, mab_total_pulls);
   int best_arm = 0;
   float best_score = -1.0f;
   std::cout << "Arm Scores: ";
   for (int i = 0; i < static_cast<int>(arms.size()); ++i) {
-    float score = arms[i].get_score(total_pulls, p90);
+    float score = arms[i].get_score(total_pulls);
     std::cout << " [" << i << "] " << score;
     if (score > best_score) { best_score = score; best_arm = i; }
   }
@@ -457,18 +438,16 @@ std::pair<Solution, Refiner> Planner::get_refined_plan(const Solution &plan)
       auto prefix = Solution(plan.begin(), plan.begin() + insert_idx + 1);
       int full_res_cost = res.empty() ? INT_MAX : get_sum_of_loss(prefix, ins->goals) + get_sum_of_loss(res);
       if (res.empty() || full_res_cost >= get_sum_of_loss(plan)) {
-        arms[chosen_arm_idx].improvements.push_back(0);
         std::cout << "ARM margin=" << arms[chosen_arm_idx].margin
                   << " type=" << arms[chosen_arm_idx].scatter_type
                   << " path_ratio=" << path_ratio
                   << " - no improvement. full res cost: " << full_res_cost << std::endl;
       } else {
-        int improvement = get_sum_of_loss(plan) - full_res_cost;
-        arms[chosen_arm_idx].improvements.push_back(improvement);
+        ++arms[chosen_arm_idx].improvement_count;
         std::cout << "ARM margin=" << arms[chosen_arm_idx].margin
                   << " type=" << arms[chosen_arm_idx].scatter_type
                   << " path_ratio=" << path_ratio
-                  << " - improvement = " << improvement << std::endl;
+                  << " - improvement = " << (get_sum_of_loss(plan) - full_res_cost) << std::endl;
       }
     }
     return {res, Refiner::RecursiveLaCAM};
