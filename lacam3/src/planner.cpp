@@ -98,14 +98,12 @@ Solution Planner::solve()
       return true;
     });
 
-    // // random insert after initial solution found
-    // if (H_goal != nullptr && get_random_float(MT) < RANDOM_INSERT_PROB2) {      
-    //   H = H_init;
-    // }
-
     // check lower bounds
     if (H_goal != nullptr && H->f >= H_goal->f) {
       if (depth > 0) break;
+      // restart
+      pibt_deadlock_attempts = PIBT_DEADLOCK_ATTEMPTS;
+      pibt_livelock_attempts = PIBT_LIVELOCK_ATTEMPTS;
       H = H_init;
       continue;
     }
