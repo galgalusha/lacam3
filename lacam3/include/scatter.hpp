@@ -10,6 +10,9 @@
 #pragma once
 
 #include "collision_table.hpp"
+
+enum ScatterType { ST_Scatter, ST_WaitScatter };
+
 #include "dist_table.hpp"
 #include "graph.hpp"
 #include "utils.hpp"

@@ -16,6 +16,7 @@
  */
 #pragma once
 
+#include "arm.hpp"
 #include "dist_table.hpp"
 #include "graph.hpp"
 #include "heuristic.hpp"
@@ -28,6 +29,12 @@
 #include "utils.hpp"
 
 enum class Refiner { LaCAM, RecursiveLaCAM, SIPP };
+
+struct RefinedPlan {
+  Solution solution;
+  Refiner caller;
+  int arm_idx;  // index into refiners_scatter_mab.arms; -1 if not RecursiveLaCAM
+};
 
 struct Planner {
   const Instance *ins;
@@ -54,7 +61,7 @@ struct Planner {
 
   // for refiner
   int seed_refiner;
-  std::list<std::future<std::pair<Solution, Refiner>>> refiner_pool;
+  std::list<std::future<RefinedPlan>> refiner_pool;
 
   // for search utils
   // std::deque<HNode *> OPEN;
@@ -100,14 +107,14 @@ struct Planner {
   Solution solve();
   bool set_new_config(HNode *S, LNode *M, Config &Q_to);
   HNode *create_highlevel_node(const Config &Q, HNode *parent);
-  void rewrite(HNode *H_from, HNode *H_to, Refiner caller);
+  void rewrite(HNode *H_from, HNode *H_to, Refiner caller, int arm_idx = -1);
   int get_edge_cost(const Config &C1, const Config &C2);
   Solution backtrack(HNode *H);
-  void apply_new_solution(const std::pair<Solution, Refiner> &result);
+  void apply_new_solution(const RefinedPlan &result);
   void set_scatter();
   void set_pibt();
   void set_refiner();
-  std::pair<Solution, Refiner> get_refined_plan(const Solution &plan_origin);
+  RefinedPlan get_refined_plan(const Solution &plan_origin);
   void update_checkpoints();
   void logging();
 };
