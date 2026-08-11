@@ -132,6 +132,7 @@ int main(int argc, char *argv[])
   Planner::CHECKPOINTS_DURATION =
       std::stof(program.get<std::string>("checkpoints-duration")) * 1000;
 
+/*
   // solve
   const auto deadline = Deadline(time_limit_sec * 1000);
   const auto solution = solve(ins, verbose - 1, &deadline, seed);
@@ -149,5 +150,11 @@ int main(int argc, char *argv[])
   // post processing
   print_stats(verbose, &deadline, ins, solution, comp_time_ms);
   make_log(ins, solution, output_name, comp_time_ms, map_name, seed, log_short);
+*/
+
+  // PairWiseHeuristic::test();
+  auto pair_wise_h = PairWiseHeuristic(ins);
+  pair_wise_h.construct();
+
   return 0;
 }

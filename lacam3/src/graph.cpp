@@ -91,6 +91,33 @@ Graph::Graph(const std::string &filename) : V(Vertices()), width(0), height(0)
   }
 }
 
+Graph::Graph(const std::vector<std::string> &grid)
+    : V(Vertices()), width(grid.empty() ? 0 : (int)grid[0].size()), height((int)grid.size())
+{
+  U = Vertices(width * height, nullptr);
+
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      if (grid[y][x] == '@') continue;
+      auto index = width * y + x;
+      auto v = new Vertex(V.size(), index, x, y);
+      V.push_back(v);
+      U[index] = v;
+    }
+  }
+
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      auto v = U[width * y + x];
+      if (v == nullptr) continue;
+      if (x > 0 && U[width * y + (x - 1)]) v->neighbor.push_back(U[width * y + (x - 1)]);
+      if (x < width - 1 && U[width * y + (x + 1)]) v->neighbor.push_back(U[width * y + (x + 1)]);
+      if (y > 0 && U[width * (y - 1) + x]) v->neighbor.push_back(U[width * (y - 1) + x]);
+      if (y < height - 1 && U[width * (y + 1) + x]) v->neighbor.push_back(U[width * (y + 1) + x]);
+    }
+  }
+}
+
 int Graph::size() const { return V.size(); }
 
 bool is_same_config(const Config &C1, const Config &C2)

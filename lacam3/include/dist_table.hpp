@@ -7,6 +7,9 @@
 #include "instance.hpp"
 #include "utils.hpp"
 
+const bool TO_GOALS = true;
+const bool TO_STARTS = false;
+
 struct DistTable {
   const int K;  // number of vertices
   std::vector<std::vector<int>>
@@ -16,8 +19,8 @@ struct DistTable {
   int get(const int i, const int v_id);   // agent, vertex-id
   int get(const int i, const Vertex *v);  // agent, vertex
 
-  DistTable(const Instance &ins);
-  DistTable(const Instance *ins);
+  DistTable(const Instance &ins, bool toward_goal = true);
+  DistTable(const Instance *ins, bool toward_goal = true);
 
-  void setup(const Instance *ins);  // initialization
+  void setup(const Instance *ins, bool toward_goal = true);  // initialization
 };

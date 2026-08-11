@@ -1,21 +1,21 @@
 #include "../include/dist_table.hpp"
 
-DistTable::DistTable(const Instance &ins)
+DistTable::DistTable(const Instance &ins, bool toward_goal)
     : K(ins.G->V.size()), table(ins.N, std::vector<int>(K, K))
 {
-  setup(&ins);
+  setup(&ins, toward_goal);
 }
 
-DistTable::DistTable(const Instance *ins)
+DistTable::DistTable(const Instance *ins, bool toward_goal)
     : K(ins->G->V.size()), table(ins->N, std::vector<int>(K, K))
 {
-  setup(ins);
+  setup(ins, toward_goal);
 }
 
-void DistTable::setup(const Instance *ins)
+void DistTable::setup(const Instance *ins, bool toward_goal)
 {
   auto bfs = [&](const int i) {
-    auto g_i = ins->goals[i];
+    auto g_i = toward_goal ? ins->goals[i] : ins->starts[i];
     auto Q = std::queue<Vertex *>({g_i});
     table[i][g_i->id] = 0;
     while (!Q.empty()) {
