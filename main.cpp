@@ -152,9 +152,9 @@ int main(int argc, char *argv[])
   make_log(ins, solution, output_name, comp_time_ms, map_name, seed, log_short);
 */
 
-  // PairWiseHeuristic::test();
-  auto pair_wise_h = PairWiseHeuristic(ins.G);
-  pair_wise_h.construct();
+  PairWiseHeuristic::test();
+//   auto pair_wise_h = PairWiseHeuristic(ins.G);
+//   pair_wise_h.construct();
 
   return 0;
 }

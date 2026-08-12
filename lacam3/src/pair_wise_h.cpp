@@ -3,9 +3,11 @@
 
 #include "../include/pair_wise_db.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
+#include <fstream>
 #include <future>
 #include <iomanip>
 #include <iostream>
@@ -252,11 +254,40 @@ void PairWiseHeuristic::construct() {
   delete D; 
 }
 
+void PairWiseHeuristic::load(Instance* ins) {
+  int N = (int)ins->goals.size();
+  for (int i = 0; i < N; ++i) {
+    for (int j = i + 1; j < N; ++j) {
+      uint16_t gi = (uint16_t)ins->goals[i]->id;
+      uint16_t gj = (uint16_t)ins->goals[j]->id;
+      uint16_t lo = std::min(gi, gj), hi = std::max(gi, gj);
+
+      std::string path = "./db/" + std::to_string(lo) + "_" + std::to_string(hi) + ".bin";
+      std::ifstream f(path, std::ios::binary);
+      if (!f) continue;
+
+      auto& table = pair_data[to_key(lo, hi)];
+      PairEntry entry;
+      while (f.read(reinterpret_cast<char*>(&entry), sizeof(PairEntry)))
+        table[to_key(entry.i_start, entry.j_start)] = entry.dh;
+    }
+  }
+}
+
+PairDHTable PairWiseHeuristic::get_pair(int g1, int g2) {
+  bool flipped = g1 > g2;
+  uint16_t lo = (uint16_t)std::min(g1, g2), hi = (uint16_t)std::max(g1, g2);
+  auto it = pair_data.find(to_key(lo, hi));
+  return {it != pair_data.end() ? &it->second : nullptr, flipped};
+}
+
 void PairWiseHeuristic::test() {
 
   std::vector<std::string> grid = {
     "....",
     "....",
+    "@@@.",
+    "..@.",
     "....",
   };
   Graph* G = new Graph(grid);
@@ -266,15 +297,30 @@ void PairWiseHeuristic::test() {
     return G->U[index];
   };
 
-  Config starts = { coord(0, 0) , coord(2, 0) };
-  Config goals  = { coord(0, 3) , coord(2, 3) };
+  auto A_start = coord(0, 0);
+  auto A_goal  = coord(4, 1);
+
+  auto B_start = coord(1, 1);
+  auto B_goal  = coord(3, 0);
+
+  auto C_start = coord(3, 1);
+  auto C_goal  = coord(0, 3);
+
+  Config starts = { A_start, B_start, C_start };
+  Config goals  = { A_goal,  B_goal,  C_goal  };
+
+  PairWiseHeuristic pwh(G);
+  pwh.construct();
 
   Instance* ins = new Instance(G, starts, goals, starts.size());
-  auto D = new DistTable(*ins);
-  bool can_interfere = PairWiseHeuristic::can_interfere(
-    D,
-    starts[0]->id, goals[0]->id,
-    starts[1]->id, goals[1]->id
-  );
-  std::cout << "[Test 1] can interfere: " << (can_interfere ? "yes" : "no") << std::endl;
+  pwh.load(ins);
+
+  PairDHTable pair_AB = pwh.get_pair(A_goal->id, B_goal->id);
+  PairDHTable pair_AC = pwh.get_pair(A_goal->id, C_goal->id);
+  PairDHTable pair_BC = pwh.get_pair(B_goal->id, C_goal->id);
+
+
+  std::cout << "A with B: " << pair_AB.get(A_start, B_start) << std::endl;
+  std::cout << "A with C: " << pair_AC.get(A_start, C_start) << std::endl;
+  std::cout << "B with C: " << pair_BC.get(B_start, C_start) << std::endl;
 }

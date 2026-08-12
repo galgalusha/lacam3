@@ -1,9 +1,9 @@
 #pragma once
 
-#include <cereal/archives/binary.hpp>
-#include <cereal/types/vector.hpp>
+#include "graph.hpp"
+
+#include <absl/container/flat_hash_map.h>
 #include <cstdint>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -17,15 +17,22 @@ struct PairEntry {
   uint16_t i_start;
   uint16_t j_start;
   uint16_t dh;
+};
 
-  template <class Archive>
-  void serialize(Archive& archive) {
-    archive(i_start, j_start, dh);
+// Lightweight handle into a loaded table; cheap to copy by value.
+struct PairDHTable {
+  const absl::flat_hash_map<PairKey, uint16_t>* data = nullptr;
+  bool flipped = false;
+
+  // Returns dh for (a->g1, b->g2). Swaps lookup key when table was stored under reversed goal order.
+  uint16_t get(Vertex* a, Vertex* b) const {
+    if (!data) return 0;
+    PairKey key = flipped ? to_key((uint16_t)b->id, (uint16_t)a->id)
+                          : to_key((uint16_t)a->id, (uint16_t)b->id);
+    auto it = data->find(key);
+    return it != data->end() ? it->second : 0;
   }
 };
 
 // Appends entries as raw binary to path (supports incremental flushing)
 void append_entries(const std::string& path, const std::vector<PairEntry>& entries);
-
-// Serializes entries to a binary string for later storage in RocksDB
-std::string serialize_for_rocksdb(const std::vector<PairEntry>& entries);

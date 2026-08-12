@@ -3,8 +3,16 @@ project(lacam-project CXX)
 
 add_subdirectory(./lacam3)
 add_subdirectory(./third_party/argparse)
-add_library(cereal INTERFACE)
-target_include_directories(cereal INTERFACE ./third_party/cereal/include)
+
+include(FetchContent)
+FetchContent_Declare(
+  absl
+  GIT_REPOSITORY https://github.com/abseil/abseil-cpp.git
+  GIT_TAG        20240722.0
+  GIT_SHALLOW    TRUE
+)
+set(ABSL_PROPAGATE_CXX_STD ON)
+FetchContent_MakeAvailable(absl)
 
 add_executable(main main.cpp)
 target_compile_features(main PUBLIC cxx_std_17)
