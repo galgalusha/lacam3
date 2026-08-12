@@ -6,6 +6,7 @@
 #include "pair_wise_db.hpp"
 
 #include <absl/container/flat_hash_map.h>
+#include <unordered_set>
 
 struct PairWiseHeuristic {
   Graph *G;
@@ -13,9 +14,11 @@ struct PairWiseHeuristic {
 
   PairWiseHeuristic(Graph *G);
   void construct();
+  void construct_for_instance(const Config& goals);
   void load(Instance* ins);
   PairDHTable get_pair(int g1, int g2);
   static bool can_interfere(DistTable* D, int i_start, int i_goal, int j_start, int j_goal);
+  static std::unordered_set<PairKey> get_keys_from_files();
   static void test();
 
 };

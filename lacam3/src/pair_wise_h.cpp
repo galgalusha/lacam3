@@ -61,6 +61,19 @@ struct ThreadPool {
 
 PairWiseHeuristic::PairWiseHeuristic(Graph* _G) : G(_G) {}
 
+std::unordered_set<PairKey> PairWiseHeuristic::get_keys_from_files() {
+  std::unordered_set<PairKey> keys;
+  if (!std::filesystem::exists("./db")) return keys;
+  for (const auto& entry : std::filesystem::directory_iterator("./db")) {
+    const std::string name = entry.path().filename().string();
+    if (name.rfind("tmp_", 0) == 0) continue; // skip in-progress files
+    int lo, hi;
+    if (std::sscanf(name.c_str(), "%d_%d.bin", &lo, &hi) == 2)
+      keys.insert(to_key((uint16_t)lo, (uint16_t)hi));
+  }
+  return keys;
+}
+
 DistTable* create_dist_table(Graph* G) {
   Config goals = G->V;
   Instance* ins = new Instance(G, goals, goals, goals.size());
@@ -68,11 +81,13 @@ DistTable* create_dist_table(Graph* G) {
   return D;
 }
 
-int astar(DistTable* D, Vertex* i_start, Vertex* i_goal, Vertex* j_start, Vertex* j_goal) {
-  // Returns minimum Sum-of-Costs for two agents to reach their goals conflict-free.
-  // Cost stops accumulating for an agent once it reaches its goal, but it remains
-  // an obstacle. If it must vacate its goal, extra steps are counted until it returns.
+// 1. Thread-local storage for the closed list. 
+// Define these globally or in an anonymous namespace within pair_wise_h.cpp.
+thread_local std::vector<int> t_closed_g;
+thread_local std::vector<uint32_t> t_closed_gen;
+thread_local uint32_t t_current_gen = 0;
 
+int astar(DistTable* D, Vertex* i_start, Vertex* i_goal, Vertex* j_start, Vertex* j_goal) {
   struct State {
     int g, f;
     Vertex* i;
@@ -81,19 +96,27 @@ int astar(DistTable* D, Vertex* i_start, Vertex* i_goal, Vertex* j_start, Vertex
 
   auto cmp = [](const State& a, const State& b) {
     if (a.f != b.f) return a.f > b.f;
-    return a.g < b.g; // tie-break: prefer higher g
+    return a.g < b.g; 
   };
   std::priority_queue<State, std::vector<State>, decltype(cmp)> open(cmp);
 
-  // closed keyed on (i_id, j_id)
-  std::unordered_map<long long, int> closed;
-  auto encode = [&](int i, int j) { return (long long)i * D->K + j; };
+  int V = D->K; 
+  
+  // Initialize the TLS vectors exactly once per thread
+  if (t_closed_g.size() < (size_t)V * V) {
+    t_closed_g.assign(V * V, INT_MAX);
+    t_closed_gen.assign(V * V, 0);
+  }
+  
+  // Increment generation counter, handle overflow to prevent stale data corruption
+  if (++t_current_gen == 0) {
+    std::fill(t_closed_gen.begin(), t_closed_gen.end(), 0);
+    t_current_gen = 1;
+  }
 
-  auto h = [&](Vertex* i, Vertex* j) {
-    return D->get(i_goal->id, i->id) + D->get(j_goal->id, j->id);
-  };
+  auto encode = [&](int i, int j) { return i * V + j; };
 
-  int h0 = h(i_start, j_start);
+  int h0 = D->get(i_goal->id, i_start->id) + D->get(j_goal->id, j_start->id);
   open.push({0, h0, i_start, j_start});
 
   while (!open.empty()) {
@@ -103,42 +126,60 @@ int astar(DistTable* D, Vertex* i_start, Vertex* i_goal, Vertex* j_start, Vertex
     if (ci == i_goal && cj == j_goal) return g;
 
     int ek = encode(ci->id, cj->id);
-    if (closed.count(ek) && closed[ek] <= g) continue;
-    closed[ek] = g;
+    
+    // Check if state was visited in the current A* generation
+    if (t_closed_gen[ek] == t_current_gen && t_closed_g[ek] <= g) continue;
+    t_closed_gen[ek] = t_current_gen;
+    t_closed_g[ek] = g;
 
-    // Build candidate moves: neighbors + wait for each agent
-    auto moves_i = ci->neighbor;
-    moves_i.push_back(ci); // wait
-    auto moves_j = cj->neighbor;
-    moves_j.push_back(cj); // wait
+    bool i_at_goal = (ci == i_goal);
+    bool j_at_goal = (cj == j_goal);
 
-    for (Vertex* ni : moves_i) {
-      for (Vertex* nj : moves_j) {
-        // Skip "both wait" only when neither is at goal (pure waste)
-        bool i_at_goal = (ci == i_goal);
-        bool j_at_goal = (cj == j_goal);
+    int i_deg = ci->neighbor.size();
+    int j_deg = cj->neighbor.size();
+
+    // 2. Stack-allocated fixed arrays for extreme L1 cache speed.
+    // Assuming max 4-connected grid (4 neighbors) + 1 wait action = size 5.
+    Vertex* moves_i[5]; 
+    Vertex* moves_j[5];
+
+    // Populate arrays to remove conditionals from the inner loops
+    for (int k = 0; k < i_deg; ++k) moves_i[k] = ci->neighbor[k];
+    moves_i[i_deg] = ci; 
+
+    for (int k = 0; k < j_deg; ++k) moves_j[k] = cj->neighbor[k];
+    moves_j[j_deg] = cj; 
+
+    // 3. Branchless arrays and hoisted heuristics
+    for (int i_idx = 0; i_idx <= i_deg; ++i_idx) {
+      Vertex* ni = moves_i[i_idx];
+      
+      int h_i = D->get(i_goal->id, ni->id);
+      int step_i = (i_at_goal && ni == i_goal) ? 0 : 1;
+
+      for (int j_idx = 0; j_idx <= j_deg; ++j_idx) {
+        Vertex* nj = moves_j[j_idx];
+
+        // Rule out wastes and conflicts
         if (ni == ci && nj == cj && !i_at_goal && !j_at_goal) continue;
+        if (ni == nj) continue; // Vertex conflict
+        if (ni == cj && nj == ci) continue; // Swap conflict
 
-        // Vertex conflict
-        if (ni == nj) continue;
-
-        // Swap conflict
-        if (ni == cj && nj == ci) continue;
-
-        // Cost: each agent contributes 1 unless already at goal and staying
-        int step_i = (i_at_goal && ni == i_goal) ? 0 : 1;
         int step_j = (j_at_goal && nj == j_goal) ? 0 : 1;
         int ng = g + step_i + step_j;
 
         int nek = encode(ni->id, nj->id);
-        if (closed.count(nek) && closed[nek] <= ng) continue;
+        
+        // O(1) closed list check bypassing the unordered_map completely
+        if (t_closed_gen[nek] == t_current_gen && t_closed_g[nek] <= ng) continue;
 
-        open.push({ng, ng + h(ni, nj), ni, nj});
+        int nf = ng + h_i + D->get(j_goal->id, nj->id);
+        open.push({ng, nf, ni, nj});
       }
     }
   }
 
-  return INT_MAX; // no solution (shouldn't happen on connected graphs)
+  return INT_MAX;
 }
 
 bool PairWiseHeuristic::can_interfere(DistTable* D, int i_start, int i_goal, int j_start, int j_goal) {
@@ -185,12 +226,14 @@ void PairWiseHeuristic::construct() {
   const int num_vertices = G->V.size();
 
   // 2. Iterate over all valid 4-tuples (i_start, i_goal, j_start, j_goal)
+  const auto done_keys = get_keys_from_files();
   long long total_outer = (long long)num_vertices * (num_vertices - 1) / 2;
   long long outer_idx = 0;
   int last_pct = -1;
   ThreadPool pool(NUM_OF_THREADS);
   for (int i_g = 0; i_g < num_vertices; ++i_g) {
     for (int j_g = i_g + 1; j_g < num_vertices; ++j_g, ++outer_idx) {
+      if (done_keys.count(to_key((uint16_t)i_g, (uint16_t)j_g))) continue;
       int pct = (int)(outer_idx * 100000 / total_outer); // units of 0.001%
       if (pct != last_pct) {
         last_pct = pct;
@@ -251,7 +294,88 @@ void PairWiseHeuristic::construct() {
   std::cout << "Pairs flagged for A*:     " << count_interfering << std::endl;
 
   // Cleanup to prevent memory leaks during offline pre-processing
-  delete D; 
+  delete D;
+}
+
+void PairWiseHeuristic::construct_for_instance(const Config& goals) {
+  std::cout << "Creating dist table... " << std::flush;
+  DistTable* D = create_dist_table(G);
+  std::cout << "Done" << std::endl;
+
+  long long count_evaluated = 0;
+  long long count_interfering = 0;
+  const int num_vertices = G->V.size();
+  const int K = (int)goals.size();
+
+  const auto done_keys = get_keys_from_files();
+  long long total_outer = (long long)K * (K - 1) / 2;
+  long long outer_idx = 0;
+  int last_pct = -1;
+  ThreadPool pool(NUM_OF_THREADS);
+  for (int agent1 = 0; agent1 < K; ++agent1) {
+    for (int agent2 = agent1 + 1; agent2 < K; ++agent2, ++outer_idx) {
+      int i_g = std::min(goals[agent1]->id, goals[agent2]->id);
+      int j_g = std::max(goals[agent1]->id, goals[agent2]->id);
+      if (done_keys.count(to_key((uint16_t)i_g, (uint16_t)j_g))) continue;
+
+      int pct = (int)(outer_idx * 100000 / total_outer); // units of 0.001%
+      if (pct != last_pct) {
+        last_pct = pct;
+        int filled = pct / 2000; // 50-char bar over 100000 units
+        std::cout << "\r[" << std::string(filled, '#') << std::string(50 - filled, ' ')
+                  << "] " << (pct / 1000) << "." << std::setw(3) << std::setfill('0') << (pct % 1000) << "%" << std::flush;
+      }
+
+      std::string tmp_path = "./db/tmp_" + std::to_string(i_g) + "_" + std::to_string(j_g) + ".bin";
+      std::string final_path = "./db/" + std::to_string(i_g) + "_" + std::to_string(j_g) + ".bin";
+      std::filesystem::create_directories("./db");
+      { std::ofstream touch(tmp_path, std::ios::binary); } // ensure file exists even if empty
+
+      std::vector<std::future<ThreadResult>> futures;
+
+      for (int i_s = 0; i_s < num_vertices; ++i_s) {
+        if (i_s == i_g) continue;
+
+        futures.push_back(pool.submit([=, D_ptr = D, &G_ref = *G]() {
+          ThreadResult result{{}, 0};
+          for (int j_s = 0; j_s < (int)G_ref.V.size(); ++j_s) {
+            if (j_s == j_g) continue;
+            if (i_s == j_s) continue;
+            ++result.evaluated;
+
+            if (can_interfere(D_ptr, i_s, i_g, j_s, j_g)) {
+              Vertex* vi_s = G_ref.V[i_s];
+              Vertex* vi_g = G_ref.V[i_g];
+              Vertex* vj_s = G_ref.V[j_s];
+              Vertex* vj_g = G_ref.V[j_g];
+
+              int independent_cost = D_ptr->get(i_g, i_s) + D_ptr->get(j_g, j_s);
+              int joint_cost = astar(D_ptr, vi_s, vi_g, vj_s, vj_g);
+              int d_h = joint_cost - independent_cost;
+              if (d_h > 0)
+                result.entries.push_back({(uint16_t)i_s, (uint16_t)j_s, (uint16_t)d_h});
+            }
+          }
+          return result;
+        }));
+      }
+
+      for (auto& fut : futures) {
+        auto [entries, evaluated] = fut.get();
+        count_evaluated += evaluated;
+        count_interfering += entries.size();
+        append_entries(tmp_path, entries);
+      }
+
+      std::filesystem::rename(tmp_path, final_path);
+    }
+  }
+
+  std::cout << "\r[" << std::string(50, '#') << "] 100%" << std::endl;
+  std::cout << "Total 4-tuples evaluated: " << count_evaluated << std::endl;
+  std::cout << "Pairs flagged for A*:     " << count_interfering << std::endl;
+
+  delete D;
 }
 
 void PairWiseHeuristic::load(Instance* ins) {
