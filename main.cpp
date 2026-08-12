@@ -153,7 +153,7 @@ int main(int argc, char *argv[])
 */
 
   // PairWiseHeuristic::test();
-  auto pair_wise_h = PairWiseHeuristic(ins);
+  auto pair_wise_h = PairWiseHeuristic(ins.G);
   pair_wise_h.construct();
 
   return 0;

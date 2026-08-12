@@ -3,6 +3,8 @@ project(lacam-project CXX)
 
 add_subdirectory(./lacam3)
 add_subdirectory(./third_party/argparse)
+add_library(cereal INTERFACE)
+target_include_directories(cereal INTERFACE ./third_party/cereal/include)
 
 add_executable(main main.cpp)
 target_compile_features(main PUBLIC cxx_std_17)

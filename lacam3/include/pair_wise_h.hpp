@@ -1,18 +1,14 @@
 #pragma once
 
-#include "dist_table.hpp"
 #include "graph.hpp"
-#include "instance.hpp"
+#include "dist_table.hpp"
 
 struct PairWiseHeuristic {
-  const Instance *ins;
   Graph *G;
-  DistTable D_goals;
-  DistTable D_starts;
 
-  PairWiseHeuristic(const Instance &ins);
+  PairWiseHeuristic(Graph *G);
   void construct();
-  bool can_interfere(int i, int j);
+  static bool can_interfere(DistTable* D, int i_start, int i_goal, int j_start, int j_goal);
   static void test();
 
 };
