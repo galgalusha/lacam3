@@ -4,13 +4,58 @@
 #include "../include/pair_wise_db.hpp"
 
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
+#include <future>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
 #include <queue>
+#include <thread>
 #include <unordered_map>
 
-constexpr int NUM_OF_THREADS = 4;
+constexpr int NUM_OF_THREADS = 7;
+
+struct ThreadResult { std::vector<PairEntry> entries; long long evaluated; };
+
+struct ThreadPool {
+  std::vector<std::thread> workers;
+  std::queue<std::packaged_task<ThreadResult()>> tasks;
+  std::mutex mtx;
+  std::condition_variable cv;
+  bool stop = false;
+
+  explicit ThreadPool(int n) {
+    for (int i = 0; i < n; ++i)
+      workers.emplace_back([this] {
+        for (;;) {
+          std::packaged_task<ThreadResult()> task;
+          {
+            std::unique_lock<std::mutex> lock(mtx);
+            cv.wait(lock, [this] { return stop || !tasks.empty(); });
+            if (stop && tasks.empty()) return;
+            task = std::move(tasks.front());
+            tasks.pop();
+          }
+          task();
+        }
+      });
+  }
+
+  ~ThreadPool() {
+    { std::unique_lock<std::mutex> lock(mtx); stop = true; }
+    cv.notify_all();
+    for (auto& t : workers) t.join();
+  }
+
+  std::future<ThreadResult> submit(std::function<ThreadResult()> fn) {
+    std::packaged_task<ThreadResult()> task(std::move(fn));
+    auto fut = task.get_future();
+    { std::unique_lock<std::mutex> lock(mtx); tasks.push(std::move(task)); }
+    cv.notify_one();
+    return fut;
+  }
+};
 
 PairWiseHeuristic::PairWiseHeuristic(Graph* _G) : G(_G) {}
 
@@ -141,6 +186,7 @@ void PairWiseHeuristic::construct() {
   long long total_outer = (long long)num_vertices * (num_vertices - 1) / 2;
   long long outer_idx = 0;
   int last_pct = -1;
+  ThreadPool pool(NUM_OF_THREADS);
   for (int i_g = 0; i_g < num_vertices; ++i_g) {
     for (int j_g = i_g + 1; j_g < num_vertices; ++j_g, ++outer_idx) {
       int pct = (int)(outer_idx * 100000 / total_outer); // units of 0.001%
@@ -154,47 +200,46 @@ void PairWiseHeuristic::construct() {
       std::string tmp_path = "./db/tmp_" + std::to_string(i_g) + "_" + std::to_string(j_g) + ".bin";
       std::string final_path = "./db/" + std::to_string(i_g) + "_" + std::to_string(j_g) + ".bin";
       std::filesystem::create_directories("./db");
+      { std::ofstream touch(tmp_path, std::ios::binary); } // ensure file exists even if empty
 
-      std::vector<PairEntry> pair_entries;
-      auto last_flush = std::chrono::steady_clock::now();
+      std::vector<std::future<ThreadResult>> futures;
 
       for (int i_s = 0; i_s < num_vertices; ++i_s) {
         if (i_s == i_g) continue;
 
-        for (int j_s = 0; j_s < num_vertices; ++j_s) {
-          if (j_s == j_g) continue;
-          if (i_s == j_s) continue;
+        futures.push_back(pool.submit([=, D_ptr = D, &G_ref = *G]() {
+          ThreadResult result{{}, 0};
+          for (int j_s = 0; j_s < (int)G_ref.V.size(); ++j_s) {
+            if (j_s == j_g) continue;
+            if (i_s == j_s) continue;
+            ++result.evaluated;
 
-          count_evaluated++;
+            if (can_interfere(D_ptr, i_s, i_g, j_s, j_g)) {
+              Vertex* vi_s = G_ref.V[i_s];
+              Vertex* vi_g = G_ref.V[i_g];
+              Vertex* vj_s = G_ref.V[j_s];
+              Vertex* vj_g = G_ref.V[j_g];
 
-          // 3. Evaluate the geometric constraints
-          if (can_interfere(D, i_s, i_g, j_s, j_g)) {
-            count_interfering++;
-
-            Vertex* vi_s = G->V[i_s];
-            Vertex* vi_g = G->V[i_g];
-            Vertex* vj_s = G->V[j_s];
-            Vertex* vj_g = G->V[j_g];
-
-            int independent_cost = D->get(i_g, i_s) + D->get(j_g, j_s);
-            int joint_cost = astar(D, vi_s, vi_g, vj_s, vj_g);
-            int d_h = joint_cost - independent_cost;
-
-            pair_entries.push_back({(uint16_t)i_s, (uint16_t)j_s, (uint16_t)d_h});
+              int independent_cost = D_ptr->get(i_g, i_s) + D_ptr->get(j_g, j_s);
+              int joint_cost = astar(D_ptr, vi_s, vi_g, vj_s, vj_g);
+              int d_h = joint_cost - independent_cost;
+              if (d_h > 0)
+                result.entries.push_back({(uint16_t)i_s, (uint16_t)j_s, (uint16_t)d_h});
+            }
           }
-
-          // Periodic flush every 5 seconds
-          auto now = std::chrono::steady_clock::now();
-          if (std::chrono::duration_cast<std::chrono::seconds>(now - last_flush).count() >= 5) {
-            append_entries(tmp_path, pair_entries);
-            pair_entries.clear();
-            last_flush = now;
-          }
-        }
+          return result;
+        }));
       }
 
-      // Final flush and promote tmp file to permanent
-      append_entries(tmp_path, pair_entries);
+      // Main thread collects results in submission order and flushes each batch
+      for (auto& fut : futures) {
+        auto [entries, evaluated] = fut.get();
+        count_evaluated += evaluated;
+        count_interfering += entries.size();
+        append_entries(tmp_path, entries);
+      }
+
+      // Promote tmp file to permanent
       std::filesystem::rename(tmp_path, final_path);
     }
   }
