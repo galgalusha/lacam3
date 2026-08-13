@@ -18,6 +18,21 @@
 
 constexpr int NUM_OF_THREADS = 7;
 
+// --- Anonymous namespace for internal linkage (recommended for globals) ---
+namespace {
+  // 1. Thread-local storage for the A* closed list (used by worker threads)
+  thread_local std::vector<int> t_closed_g;
+  thread_local std::vector<uint32_t> t_closed_gen;
+  thread_local uint32_t t_current_gen = 0;
+
+  // 2. Shared storage for the BFS reachability analysis (populated by main thread, read by workers)
+  std::vector<uint32_t> shared_zero_dh_gen;
+  uint32_t shared_zero_current_gen = 0;
+
+  // 3. Zero-allocation queue for the backward BFS (used exclusively by main thread)
+  std::vector<std::pair<Vertex*, Vertex*>> shared_bfs_q;
+}
+
 struct ThreadResult { std::vector<PairEntry> entries; long long evaluated; };
 
 struct ThreadPool {
@@ -80,12 +95,6 @@ DistTable* create_dist_table(Graph* G) {
   auto D = new DistTable(ins);
   return D;
 }
-
-// 1. Thread-local storage for the closed list. 
-// Define these globally or in an anonymous namespace within pair_wise_h.cpp.
-thread_local std::vector<int> t_closed_g;
-thread_local std::vector<uint32_t> t_closed_gen;
-thread_local uint32_t t_current_gen = 0;
 
 int astar(DistTable* D, Vertex* i_start, Vertex* i_goal, Vertex* j_start, Vertex* j_goal) {
   struct State {
@@ -214,6 +223,83 @@ bool PairWiseHeuristic::can_interfere(DistTable* D, int i_start, int i_goal, int
   return true;
 }
 
+void populate_zero_dh_by_bfs(DistTable* D, Vertex* i_goal, Vertex* j_goal) {
+  int V = D->K; 
+
+  // Handle generation overflow
+  if (++shared_zero_current_gen == 0) {
+    std::fill(shared_zero_dh_gen.begin(), shared_zero_dh_gen.end(), 0);
+    shared_zero_current_gen = 1;
+  }
+
+  // Reset the flat queue without releasing memory capacity
+  shared_bfs_q.clear(); 
+  shared_bfs_q.push_back({i_goal, j_goal});
+  
+  // Mark initial state
+  shared_zero_dh_gen[i_goal->id * V + j_goal->id] = shared_zero_current_gen;
+
+  size_t head = 0;
+  while (head < shared_bfs_q.size()) {
+    auto [u, v] = shared_bfs_q[head++];
+
+    int d_i = D->get(i_goal->id, u->id);
+    int d_j = D->get(j_goal->id, v->id);
+
+    // 1. Build valid moves for agent i
+    Vertex* moves_i[5];
+    int deg_i = 0;
+    for (Vertex* n : u->neighbor) {
+      // Only keep neighbors that step strictly away from the goal
+      if (D->get(i_goal->id, n->id) == d_i + 1) {
+        moves_i[deg_i++] = n;
+      }
+    }
+    // Conditionally append wait action
+    if (u == i_goal) {
+      moves_i[deg_i++] = u; 
+    }
+
+    // 2. Build valid moves for agent j
+    Vertex* moves_j[5];
+    int deg_j = 0;
+    for (Vertex* n : v->neighbor) {
+      // Only keep neighbors that step strictly away from the goal
+      if (D->get(j_goal->id, n->id) == d_j + 1) {
+        moves_j[deg_j++] = n;
+      }
+    }
+    // Conditionally append wait action
+    if (v == j_goal) {
+      moves_j[deg_j++] = v;
+    }
+
+    // 3. Clean, branchless nested loops over pre-filtered moves
+    for (int i_idx = 0; i_idx < deg_i; ++i_idx) {
+      Vertex* u_prime = moves_i[i_idx];
+
+      for (int j_idx = 0; j_idx < deg_j; ++j_idx) {
+        Vertex* v_prime = moves_j[j_idx];
+
+        // Skip pure joint-wait to avoid infinite loop at the initial (goal, goal) state
+        if (u_prime == u && v_prime == v) continue;
+        
+        // Check conflicts
+        if (u_prime == v_prime) continue; // Vertex conflict
+        if (u_prime == v && v_prime == u) continue; // Swap conflict
+
+        int ek = u_prime->id * V + v_prime->id;
+        
+        // If not visited in the current generation, mark and push
+        if (shared_zero_dh_gen[ek] != shared_zero_current_gen) {
+          shared_zero_dh_gen[ek] = shared_zero_current_gen;
+          shared_bfs_q.push_back({u_prime, v_prime});
+        }
+      }
+    }
+  }
+}
+
 void PairWiseHeuristic::construct() { 
   // 1. Create the APSP (All-Pairs Shortest Path) distance table
   Config all_vertices = G->V;
@@ -224,6 +310,7 @@ void PairWiseHeuristic::construct() {
   long long count_evaluated = 0;
   long long count_interfering = 0;
   const int num_vertices = G->V.size();
+  shared_zero_dh_gen = std::vector<uint32_t>(num_vertices * num_vertices, 0);
 
   // 2. Iterate over all valid 4-tuples (i_start, i_goal, j_start, j_goal)
   const auto done_keys = get_keys_from_files();
@@ -242,6 +329,8 @@ void PairWiseHeuristic::construct() {
                   << "] " << (pct / 1000) << "." << std::setw(3) << std::setfill('0') << (pct % 1000) << "%" << std::flush;
       }
 
+      populate_zero_dh_by_bfs(D, G->V[i_g], G->V[j_g]);
+
       std::string tmp_path = "./db/tmp_" + std::to_string(i_g) + "_" + std::to_string(j_g) + ".bin";
       std::string final_path = "./db/" + std::to_string(i_g) + "_" + std::to_string(j_g) + ".bin";
       std::filesystem::create_directories("./db");
@@ -258,6 +347,9 @@ void PairWiseHeuristic::construct() {
             if (j_s == j_g) continue;
             if (i_s == j_s) continue;
             ++result.evaluated;
+
+            int ek = i_s * D->K + j_s;
+            if (shared_zero_dh_gen[ek] == shared_zero_current_gen) continue;
 
             if (can_interfere(D_ptr, i_s, i_g, j_s, j_g)) {
               Vertex* vi_s = G_ref.V[i_s];
@@ -306,6 +398,7 @@ void PairWiseHeuristic::construct_for_instance(const Config& goals) {
   long long count_interfering = 0;
   const int num_vertices = G->V.size();
   const int K = (int)goals.size();
+  shared_zero_dh_gen = std::vector<uint32_t>(num_vertices * num_vertices, 0);
 
   const auto done_keys = get_keys_from_files();
   long long total_outer = (long long)K * (K - 1) / 2;
@@ -326,6 +419,8 @@ void PairWiseHeuristic::construct_for_instance(const Config& goals) {
                   << "] " << (pct / 1000) << "." << std::setw(3) << std::setfill('0') << (pct % 1000) << "%" << std::flush;
       }
 
+      populate_zero_dh_by_bfs(D, G->V[i_g], G->V[j_g]);
+
       std::string tmp_path = "./db/tmp_" + std::to_string(i_g) + "_" + std::to_string(j_g) + ".bin";
       std::string final_path = "./db/" + std::to_string(i_g) + "_" + std::to_string(j_g) + ".bin";
       std::filesystem::create_directories("./db");
@@ -342,6 +437,10 @@ void PairWiseHeuristic::construct_for_instance(const Config& goals) {
             if (j_s == j_g) continue;
             if (i_s == j_s) continue;
             ++result.evaluated;
+
+            int ek = i_s * D->K + j_s;
+            
+            if (shared_zero_dh_gen[ek] == shared_zero_current_gen) continue;
 
             if (can_interfere(D_ptr, i_s, i_g, j_s, j_g)) {
               Vertex* vi_s = G_ref.V[i_s];
