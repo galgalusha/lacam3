@@ -17,6 +17,7 @@
 #include <unordered_map>
 
 constexpr int NUM_OF_THREADS = 7;
+constexpr char* DB_PATH = "/home/galko/dev/mapf_db/";
 
 // --- Anonymous namespace for internal linkage (recommended for globals) ---
 namespace {
@@ -74,12 +75,12 @@ struct ThreadPool {
   }
 };
 
-PairWiseHeuristic::PairWiseHeuristic(Graph* _G) : G(_G) {}
+PairWiseHeuristic::PairWiseHeuristic(Graph* _G, std::string _name) : G(_G), name(_name) {}
 
 std::unordered_set<PairKey> PairWiseHeuristic::get_keys_from_files() {
   std::unordered_set<PairKey> keys;
-  if (!std::filesystem::exists("./db")) return keys;
-  for (const auto& entry : std::filesystem::directory_iterator("./db")) {
+  if (!std::filesystem::exists(DB_PATH + name)) return keys;
+  for (const auto& entry : std::filesystem::directory_iterator(DB_PATH + name)) {
     const std::string name = entry.path().filename().string();
     if (name.rfind("tmp_", 0) == 0) continue; // skip in-progress files
     int lo, hi;
@@ -96,7 +97,7 @@ DistTable* create_dist_table(Graph* G) {
   return D;
 }
 
-int astar(DistTable* D, Vertex* i_start, Vertex* i_goal, Vertex* j_start, Vertex* j_goal) {
+int joint_astar(DistTable* D, Vertex* i_start, Vertex* i_goal, Vertex* j_start, Vertex* j_goal) {
   struct State {
     int g, f;
     Vertex* i;
@@ -223,6 +224,35 @@ bool PairWiseHeuristic::can_interfere(DistTable* D, int i_start, int i_goal, int
   return true;
 }
 
+bool PairWiseHeuristic::has_alternative_path(DistTable* D, Vertex* blocked, Vertex* v_s, Vertex* v_g) {
+  int target_dist = D->get(v_g->id, v_s->id);
+  if (target_dist == D->K) return false;
+  if (v_s == blocked) return false;
+
+  // BFS over shortest-path DAG; visited prevents exponential re-expansion on open grids
+  std::vector<bool> visited(D->K, false);
+  std::vector<Vertex*> frontier;
+  frontier.push_back(v_s);
+  visited[v_s->id] = true;
+
+  while (!frontier.empty()) {
+    std::vector<Vertex*> next;
+    for (Vertex* cur : frontier) {
+      if (cur == v_g) return true;
+      int remaining = D->get(v_g->id, cur->id);
+      for (Vertex* nb : cur->neighbor) {
+        if (nb == blocked) continue;
+        if (visited[nb->id]) continue;
+        if (D->get(v_g->id, nb->id) != remaining - 1) continue;
+        visited[nb->id] = true;
+        next.push_back(nb);
+      }
+    }
+    frontier = std::move(next);
+  }
+  return false;
+}
+
 void populate_zero_dh_by_bfs(DistTable* D, Vertex* i_goal, Vertex* j_goal) {
   int V = D->K; 
 
@@ -331,9 +361,9 @@ void PairWiseHeuristic::construct() {
 
       populate_zero_dh_by_bfs(D, G->V[i_g], G->V[j_g]);
 
-      std::string tmp_path = "./db/tmp_" + std::to_string(i_g) + "_" + std::to_string(j_g) + ".bin";
-      std::string final_path = "./db/" + std::to_string(i_g) + "_" + std::to_string(j_g) + ".bin";
-      std::filesystem::create_directories("./db");
+      std::string tmp_path = DB_PATH + name + "/" + std::to_string(i_g) + "_" + std::to_string(j_g) + ".bin";
+      std::string final_path = DB_PATH + name + "/" + std::to_string(i_g) + "_" + std::to_string(j_g) + ".bin";
+      std::filesystem::create_directories(DB_PATH + name);
       { std::ofstream touch(tmp_path, std::ios::binary); } // ensure file exists even if empty
 
       std::vector<std::future<ThreadResult>> futures;
@@ -358,7 +388,7 @@ void PairWiseHeuristic::construct() {
               Vertex* vj_g = G_ref.V[j_g];
 
               int independent_cost = D_ptr->get(i_g, i_s) + D_ptr->get(j_g, j_s);
-              int joint_cost = astar(D_ptr, vi_s, vi_g, vj_s, vj_g);
+              int joint_cost = joint_astar(D_ptr, vi_s, vi_g, vj_s, vj_g);
               int d_h = joint_cost - independent_cost;
               if (d_h > 0)
                 result.entries.push_back({(uint16_t)i_s, (uint16_t)j_s, (uint16_t)d_h});
@@ -421,9 +451,9 @@ void PairWiseHeuristic::construct_for_instance(const Config& goals) {
 
       populate_zero_dh_by_bfs(D, G->V[i_g], G->V[j_g]);
 
-      std::string tmp_path = "./db/tmp_" + std::to_string(i_g) + "_" + std::to_string(j_g) + ".bin";
-      std::string final_path = "./db/" + std::to_string(i_g) + "_" + std::to_string(j_g) + ".bin";
-      std::filesystem::create_directories("./db");
+      std::string tmp_path = DB_PATH + name + "/tmp_" + std::to_string(i_g) + "_" + std::to_string(j_g) + ".bin";
+      std::string final_path = DB_PATH + name + "/" + std::to_string(i_g) + "_" + std::to_string(j_g) + ".bin";
+      std::filesystem::create_directories(DB_PATH + name);
       { std::ofstream touch(tmp_path, std::ios::binary); } // ensure file exists even if empty
 
       std::vector<std::future<ThreadResult>> futures;
@@ -449,7 +479,7 @@ void PairWiseHeuristic::construct_for_instance(const Config& goals) {
               Vertex* vj_g = G_ref.V[j_g];
 
               int independent_cost = D_ptr->get(i_g, i_s) + D_ptr->get(j_g, j_s);
-              int joint_cost = astar(D_ptr, vi_s, vi_g, vj_s, vj_g);
+              int joint_cost = joint_astar(D_ptr, vi_s, vi_g, vj_s, vj_g);
               int d_h = joint_cost - independent_cost;
               if (d_h > 0)
                 result.entries.push_back({(uint16_t)i_s, (uint16_t)j_s, (uint16_t)d_h});
@@ -477,6 +507,124 @@ void PairWiseHeuristic::construct_for_instance(const Config& goals) {
   delete D;
 }
 
+void PairWiseHeuristic::construct_for_instance_only_goals(const Config& goals) {
+  std::cout << "Creating dist table... " << std::flush;
+  DistTable* D = create_dist_table(G);
+  std::cout << "Done" << std::endl;
+
+  const int num_vertices = G->V.size();
+  const int K = (int)goals.size();
+
+  long long total_outer = (long long)K * (K - 1) / 2;
+  long long outer_idx = 0;
+  int last_pct = -1;
+  ThreadPool pool(NUM_OF_THREADS);
+
+  // absl::flat_hash_map<PairKey, absl::flat_hash_map<PairKey, uint16_t>> pair_data2;
+
+  for (int agent1 = 0; agent1 < K; ++agent1) {
+    for (int agent2 = agent1 + 1; agent2 < K; ++agent2, ++outer_idx) {
+      int pct = (int)(outer_idx * 100000 / total_outer);
+      if (pct != last_pct) {
+        last_pct = pct;
+        int filled = pct / 2000;
+        std::cout << "\r[" << std::string(filled, '#') << std::string(50 - filled, ' ')
+                  << "] " << (pct / 1000) << "." << std::setw(3) << std::setfill('0') << (pct % 1000) << "%" << std::flush;
+      }
+      int i_g = std::min(goals[agent1]->id, goals[agent2]->id);
+      int j_g = std::max(goals[agent1]->id, goals[agent2]->id);
+
+      std::string tmp_path   = DB_PATH + name + "/tmp_" + std::to_string(i_g) + "_" + std::to_string(j_g) + ".bin";
+      std::string final_path = DB_PATH + name + "/"     + std::to_string(i_g) + "_" + std::to_string(j_g) + ".bin";
+      std::filesystem::create_directories(DB_PATH + name);
+      { std::ofstream touch(tmp_path, std::ios::binary); }
+
+      std::vector<std::future<ThreadResult>> futures;
+
+      // case 1: i_s == i_g, one task per j_s
+      for (int j_s = 0; j_s < (int)G->V.size(); ++j_s) {
+        if (j_s == j_g || j_s == i_g) continue;
+        futures.push_back(pool.submit([=, D_ptr = D, &G_ref = *G]() {
+          ThreadResult result{{}, 0};
+          int i_s = i_g;
+          if (D_ptr->get(j_s, i_g) + D_ptr->get(i_g, j_g) != D_ptr->get(j_s, j_g)) return result;
+          Vertex* vi_s = G_ref.V[i_s];
+          Vertex* vi_g = G_ref.V[i_g];
+          Vertex* vj_s = G_ref.V[j_s];
+          Vertex* vj_g = G_ref.V[j_g];
+          if (has_alternative_path(D_ptr, vi_g, vj_s, vj_g)) return result;
+          int dh = joint_astar(D_ptr, vi_s, vi_g, vj_s, vj_g) - D_ptr->get(j_s, j_g) - D_ptr->get(i_s, i_g);
+          if (dh != 0)
+            result.entries.push_back({(uint16_t)i_s, (uint16_t)j_s, (uint16_t)dh});
+          return result;
+        }));
+      }
+
+      // case 2: j_s == j_g, one task per i_s
+      for (int i_s = 0; i_s < (int)G->V.size(); ++i_s) {
+        if (i_s == i_g || i_s == j_g) continue;
+        futures.push_back(pool.submit([=, D_ptr = D, &G_ref = *G]() {
+          ThreadResult result{{}, 0};
+          int j_s = j_g;
+          if (D_ptr->get(i_s, j_g) + D_ptr->get(j_g, i_g) != D_ptr->get(i_s, i_g)) return result;
+          Vertex* vi_s = G_ref.V[i_s];
+          Vertex* vi_g = G_ref.V[i_g];
+          Vertex* vj_s = G_ref.V[j_s];
+          Vertex* vj_g = G_ref.V[j_g];
+          if (has_alternative_path(D_ptr, vj_g, vi_s, vi_g)) return result;
+          int dh = joint_astar(D_ptr, vi_s, vi_g, vj_s, vj_g) - D_ptr->get(j_s, j_g) - D_ptr->get(i_s, i_g);
+          if (dh != 0)
+            result.entries.push_back({(uint16_t)i_s, (uint16_t)j_s, (uint16_t)dh});
+          return result;
+        }));
+      }
+
+      std::vector<PairEntry> all_entries;
+      for (auto& fut : futures) {
+        auto [entries, evaluated] = fut.get();
+        all_entries.insert(all_entries.end(), entries.begin(), entries.end());
+      }
+      std::sort(all_entries.begin(), all_entries.end(), [](const PairEntry& a, const PairEntry& b) {
+        if (a.i_start != b.i_start) return a.i_start < b.i_start;
+        return a.j_start < b.j_start;
+      });
+      append_entries(tmp_path, all_entries);
+      std::filesystem::rename(tmp_path, final_path);
+    }
+  }
+  std::cout << "\r[" << std::string(50, '#') << "] 100%" << std::endl;
+  delete D;
+}
+
+void PairWiseHeuristic::construct_for_instance_only_goals_debug() {
+  std::cout << "Creating dist table... " << std::flush;
+  DistTable* D = create_dist_table(G);
+  std::cout << "Done" << std::endl;
+
+  const int num_vertices = G->V.size();
+  const int K = D->K;
+
+  long long total_outer = (long long)K * (K - 1) / 2;
+  long long outer_idx = 0;
+  int last_pct = -1;
+  auto D_ptr = D;
+  Graph& G_ref = *G;
+
+  int i_g = 3;
+  int j_g = 34;
+  int j_s = j_g;
+  int i_s = 91;
+  Vertex* vi_s = G_ref.V[i_s];
+  Vertex* vi_g = G_ref.V[i_g];
+  Vertex* vj_s = G_ref.V[j_s];
+  Vertex* vj_g = G_ref.V[j_g];
+  std::cout << "case 2\ti_s=" << i_s << std::endl;
+  if (has_alternative_path(D_ptr, vj_g, vi_s, vi_g)) return;
+  std::cout << "has_alternative_path done" << std::endl;
+  int dh = joint_astar(D_ptr, vi_s, vi_g, vj_s, vj_g) - D_ptr->get(j_s, j_g) - D_ptr->get(i_s, i_g);
+  delete D;
+}
+
 void PairWiseHeuristic::load(Instance* ins) {
   int N = (int)ins->goals.size();
   for (int i = 0; i < N; ++i) {
@@ -485,7 +633,7 @@ void PairWiseHeuristic::load(Instance* ins) {
       uint16_t gj = (uint16_t)ins->goals[j]->id;
       uint16_t lo = std::min(gi, gj), hi = std::max(gi, gj);
 
-      std::string path = "./db/" + std::to_string(lo) + "_" + std::to_string(hi) + ".bin";
+      std::string path = DB_PATH + name + "/" + std::to_string(lo) + "_" + std::to_string(hi) + ".bin";
       std::ifstream f(path, std::ios::binary);
       if (!f) continue;
 
@@ -526,15 +674,24 @@ void PairWiseHeuristic::test() {
   auto B_start = coord(1, 1);
   auto B_goal  = coord(3, 0);
 
-  auto C_start = coord(3, 1);
-  auto C_goal  = coord(0, 3);
+  // auto C_start = coord(3, 1);
+  // auto C_goal  = coord(0, 3);
+
+  auto C_start = coord(4, 2);
+  auto C_goal  = coord(4, 2);
 
   Config starts = { A_start, B_start, C_start };
   Config goals  = { A_goal,  B_goal,  C_goal  };
 
-  PairWiseHeuristic pwh(G);
-  pwh.construct();
+  std::string test2 = "test2";
+  std::string test2_goals = "test2_goals";
+  PairWiseHeuristic pwh_no_goals(G, test2);
+  pwh_no_goals.construct_for_instance(goals);
+  PairWiseHeuristic pwh_goals(G, test2_goals);
+  pwh_goals.construct_for_instance_only_goals(goals);
+  merge_goal_folder(DB_PATH + test2, DB_PATH + test2_goals);
 
+  PairWiseHeuristic pwh(G, test2);
   Instance* ins = new Instance(G, starts, goals, starts.size());
   pwh.load(ins);
 
@@ -546,4 +703,5 @@ void PairWiseHeuristic::test() {
   std::cout << "A with B: " << pair_AB.get(A_start, B_start) << std::endl;
   std::cout << "A with C: " << pair_AC.get(A_start, C_start) << std::endl;
   std::cout << "B with C: " << pair_BC.get(B_start, C_start) << std::endl;
+  std::cout << "Done 2" << std::endl;
 }

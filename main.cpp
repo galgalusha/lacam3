@@ -1,6 +1,8 @@
 #include <argparse/argparse.hpp>
 #include <iostream>
 #include <lacam.hpp>
+#include <pair_wise_db.hpp>
+#include <drawing.hpp>
 
 int main(int argc, char *argv[])
 {
@@ -98,7 +100,7 @@ int main(int argc, char *argv[])
   const auto output_name = program.get<std::string>("output");
   const auto log_short = program.get<bool>("log_short");
   const auto N = std::stoi(program.get<std::string>("num"));
-  const auto ins = scen_name.size() > 0 ? Instance(scen_name, map_name, N)
+  auto ins = scen_name.size() > 0 ? Instance(scen_name, map_name, N)
                                         : Instance(map_name, N, seed);
   if (!ins.is_valid(1)) return 1;
 
@@ -152,9 +154,19 @@ int main(int argc, char *argv[])
   make_log(ins, solution, output_name, comp_time_ms, map_name, seed, log_short);
 */
 
-//  PairWiseHeuristic::test();
-  auto pair_wise_h = PairWiseHeuristic(ins.G);
-  pair_wise_h.construct_for_instance(ins.goals);
+  // PairWiseHeuristic::test();
+  merge_goal_folder("/home/galko/dev/mapf_db/maze-32-32-2.N-399", "/home/galko/dev/mapf_db/maze_goals");
 
+//   auto pair_wise_h = PairWiseHeuristic(ins.G, "maze_goals");
+//   pair_wise_h.construct_for_instance_only_goals(ins.goals);
+
+  // to_csv("/home/galko/dev/mapf_db/maze-32-32-2.N-399/97_664.bin", "/home/galko/97_664.csv");
+
+//   Config starts = { ins.G->V[595], ins.G->V[507] };
+//   Config goals =  { ins.G->V[97] , ins.G->V[664] };
+//   ins.goals = goals;
+//   ins.starts = starts;
+//   ins.N = 2;
+//   draw_instance(&ins);
   return 0;
 }

@@ -11,7 +11,7 @@ struct Instance {
   Graph *G;       // graph
   Config starts;  // initial configuration
   Config goals;   // goal configuration
-  const uint N;   // number of agents
+  uint N;   // number of agents
   bool delete_graph_after_used;
 
   Instance(Graph *_G, const Config &_starts, const Config &_goals, uint _N);
