@@ -13,6 +13,7 @@
 #include <iostream>
 #include <mutex>
 #include <queue>
+#include <random>
 #include <thread>
 #include <unordered_map>
 
@@ -596,33 +597,23 @@ void PairWiseHeuristic::construct_for_instance_only_goals(const Config& goals) {
   delete D;
 }
 
-void PairWiseHeuristic::construct_for_instance_only_goals_debug() {
-  std::cout << "Creating dist table... " << std::flush;
-  DistTable* D = create_dist_table(G);
-  std::cout << "Done" << std::endl;
-
-  const int num_vertices = G->V.size();
-  const int K = D->K;
-
-  long long total_outer = (long long)K * (K - 1) / 2;
-  long long outer_idx = 0;
-  int last_pct = -1;
-  auto D_ptr = D;
-  Graph& G_ref = *G;
-
-  int i_g = 3;
-  int j_g = 34;
-  int j_s = j_g;
-  int i_s = 91;
-  Vertex* vi_s = G_ref.V[i_s];
-  Vertex* vi_g = G_ref.V[i_g];
-  Vertex* vj_s = G_ref.V[j_s];
-  Vertex* vj_g = G_ref.V[j_g];
-  std::cout << "case 2\ti_s=" << i_s << std::endl;
-  if (has_alternative_path(D_ptr, vj_g, vi_s, vi_g)) return;
-  std::cout << "has_alternative_path done" << std::endl;
-  int dh = joint_astar(D_ptr, vi_s, vi_g, vj_s, vj_g) - D_ptr->get(j_s, j_g) - D_ptr->get(i_s, i_g);
-  delete D;
+void PairWiseHeuristic::load_bin_file(uint16_t lo, uint16_t hi, const std::string& path) {
+  std::ifstream f(path, std::ios::binary);
+  if (!f) return;
+  PairEntry entry;
+  while (f.read(reinterpret_cast<char*>(&entry), sizeof(PairEntry))) {
+    uint8_t dh;
+    if (entry.dh > 255) {
+      std::cout << "[pair_wise_h] warning: dh value " << entry.dh << " exceeds 255, trimming to 255" << std::endl;
+      dh = 255;
+    } else {
+      dh = (uint8_t)entry.dh;
+    }
+    JointKey jk = to_joint_key(lo, hi, entry.i_start, entry.j_start);
+    uint8_t idx = (uint8_t)(jk >> 32);
+    uint32_t mk = (uint32_t)(jk & 0xFFFFFFFF);
+    pair_data[idx][mk] = dh;
+  }
 }
 
 void PairWiseHeuristic::load(Instance* ins) {
@@ -632,24 +623,95 @@ void PairWiseHeuristic::load(Instance* ins) {
       uint16_t gi = (uint16_t)ins->goals[i]->id;
       uint16_t gj = (uint16_t)ins->goals[j]->id;
       uint16_t lo = std::min(gi, gj), hi = std::max(gi, gj);
-
       std::string path = DB_PATH + name + "/" + std::to_string(lo) + "_" + std::to_string(hi) + ".bin";
-      std::ifstream f(path, std::ios::binary);
-      if (!f) continue;
-
-      auto& table = pair_data[to_key(lo, hi)];
-      PairEntry entry;
-      while (f.read(reinterpret_cast<char*>(&entry), sizeof(PairEntry)))
-        table[to_key(entry.i_start, entry.j_start)] = entry.dh;
+      load_bin_file(lo, hi, path);
     }
   }
 }
 
-PairDHTable PairWiseHeuristic::get_pair(int g1, int g2) {
-  bool flipped = g1 > g2;
-  uint16_t lo = (uint16_t)std::min(g1, g2), hi = (uint16_t)std::max(g1, g2);
-  auto it = pair_data.find(to_key(lo, hi));
-  return {it != pair_data.end() ? &it->second : nullptr, flipped};
+uint8_t PairWiseHeuristic::get(uint16_t i_goal, uint16_t j_goal, uint16_t i_start, uint16_t j_start) const {
+  bool flipped = i_goal > j_goal;
+  uint16_t lo  = flipped ? j_goal  : i_goal;
+  uint16_t hi  = flipped ? i_goal  : j_goal;
+  uint16_t is  = flipped ? j_start : i_start;
+  uint16_t js  = flipped ? i_start : j_start;
+  JointKey jk = to_joint_key(lo, hi, is, js);
+  uint8_t idx = (uint8_t)(jk >> 32);
+  uint32_t mk = (uint32_t)(jk & 0xFFFFFFFF);
+  auto it = pair_data[idx].find(mk);
+  return it != pair_data[idx].end() ? it->second : 0;
+}
+
+void PairWiseHeuristic::integration_test() {
+  std::string dir = DB_PATH + name;
+  if (!std::filesystem::exists(dir)) {
+    std::cout << "[integration_test] directory not found: " << dir << std::endl;
+    return;
+  }
+
+  std::vector<std::filesystem::path> files;
+  for (const auto& e : std::filesystem::directory_iterator(dir)) {
+    const std::string fname = e.path().filename().string();
+    if (fname.rfind("tmp_", 0) == 0) continue;
+    int lo, hi;
+    if (std::sscanf(fname.c_str(), "%d_%d.bin", &lo, &hi) == 2)
+      files.push_back(e.path());
+  }
+
+  std::mt19937 rng(42);
+  if ((int)files.size() > 100) {
+    std::shuffle(files.begin(), files.end(), rng);
+    files.resize(100);
+  }
+
+  long long assert_pass = 0, assert_fail = 0;
+  // index 1-10 for dh=1..10, index 11 for dh>10 (index 0 unused)
+  std::array<long long, 12> dh_counts{};
+  std::vector<std::string> failures;
+
+  for (const auto& fpath : files) {
+    std::string fname = fpath.filename().string();
+    int lo_i = 0, hi_i = 0;
+    std::sscanf(fname.c_str(), "%d_%d.bin", &lo_i, &hi_i);
+    uint16_t lo = (uint16_t)lo_i, hi = (uint16_t)hi_i;
+
+    load_bin_file(lo, hi, fpath.string());
+
+    std::ifstream f(fpath.string(), std::ios::binary);
+    PairEntry entry;
+    while (f.read(reinterpret_cast<char*>(&entry), sizeof(PairEntry))) {
+      uint8_t expected = entry.dh > 255 ? 255 : (uint8_t)entry.dh;
+//      uint8_t actual = get(lo, hi, entry.i_start, entry.j_start);
+      uint8_t actual = get(hi, lo, entry.j_start, entry.i_start);
+
+      int bucket = expected <= 10 ? (int)expected : 11;
+      dh_counts[bucket]++;
+
+      if (actual == expected) {
+        ++assert_pass;
+      } else {
+        ++assert_fail;
+        if (failures.size() < 20)
+          failures.push_back("file=" + fname + " start=(" + std::to_string(entry.i_start) +
+                             "," + std::to_string(entry.j_start) + ") expected=" +
+                             std::to_string(expected) + " got=" + std::to_string(actual));
+      }
+    }
+
+    for (auto& m : pair_data) m.clear();
+  }
+
+  std::cout << "[integration_test] Results over " << files.size() << " file(s):" << std::endl;
+  std::cout << "  Assertions passed: " << assert_pass << std::endl;
+  std::cout << "  Assertions failed: " << assert_fail << std::endl;
+  std::cout << "  dh distribution:" << std::endl;
+  for (int d = 1; d <= 10; ++d)
+    std::cout << "    dh=" << d << ": " << dh_counts[d] << std::endl;
+  std::cout << "    dh>10: " << dh_counts[11] << std::endl;
+  if (!failures.empty()) {
+    std::cout << "  Failed assertions (first " << failures.size() << "):" << std::endl;
+    for (const auto& msg : failures) std::cout << "    " << msg << std::endl;
+  }
 }
 
 void PairWiseHeuristic::test() {
@@ -695,13 +757,8 @@ void PairWiseHeuristic::test() {
   Instance* ins = new Instance(G, starts, goals, starts.size());
   pwh.load(ins);
 
-  PairDHTable pair_AB = pwh.get_pair(A_goal->id, B_goal->id);
-  PairDHTable pair_AC = pwh.get_pair(A_goal->id, C_goal->id);
-  PairDHTable pair_BC = pwh.get_pair(B_goal->id, C_goal->id);
-
-
-  std::cout << "A with B: " << pair_AB.get(A_start, B_start) << std::endl;
-  std::cout << "A with C: " << pair_AC.get(A_start, C_start) << std::endl;
-  std::cout << "B with C: " << pair_BC.get(B_start, C_start) << std::endl;
+  std::cout << "A with B: " << (int)pwh.get(A_goal->id, B_goal->id, A_start->id, B_start->id) << std::endl;
+  std::cout << "A with C: " << (int)pwh.get(A_goal->id, C_goal->id, A_start->id, C_start->id) << std::endl;
+  std::cout << "B with C: " << (int)pwh.get(B_goal->id, C_goal->id, B_start->id, C_start->id) << std::endl;
   std::cout << "Done 2" << std::endl;
 }

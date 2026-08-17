@@ -1,8 +1,5 @@
 #pragma once
 
-#include "graph.hpp"
-
-#include <absl/container/flat_hash_map.h>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -19,20 +16,15 @@ struct PairEntry {
   uint16_t dh;
 };
 
-// Lightweight handle into a loaded table; cheap to copy by value.
-struct PairDHTable {
-  const absl::flat_hash_map<PairKey, uint16_t>* data = nullptr;
-  bool flipped = false;
+// 40-bit key: 10 bits each for i_goal, j_goal, i_start, j_start (MSB to LSB)
+using JointKey = uint64_t;
 
-  // Returns dh for (a->g1, b->g2). Swaps lookup key when table was stored under reversed goal order.
-  uint16_t get(Vertex* a, Vertex* b) const {
-    if (!data) return 0;
-    PairKey key = flipped ? to_key((uint16_t)b->id, (uint16_t)a->id)
-                          : to_key((uint16_t)a->id, (uint16_t)b->id);
-    auto it = data->find(key);
-    return it != data->end() ? it->second : 0;
-  }
-};
+inline JointKey to_joint_key(uint16_t i_goal, uint16_t j_goal, uint16_t i_start, uint16_t j_start) {
+  return ((JointKey)(i_goal  & 0x3FF) << 30) |
+         ((JointKey)(j_goal  & 0x3FF) << 20) |
+         ((JointKey)(i_start & 0x3FF) << 10) |
+         ((JointKey)(j_start & 0x3FF));
+}
 
 // Appends entries as raw binary to path (supports incremental flushing)
 void append_entries(const std::string& path, const std::vector<PairEntry>& entries);
