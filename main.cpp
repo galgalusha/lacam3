@@ -1,6 +1,7 @@
 #include <argparse/argparse.hpp>
 #include <iostream>
 #include <lacam.hpp>
+#include <pair_wise_bin.hpp>
 #include <pair_wise_db.hpp>
 #include <drawing.hpp>
 
@@ -154,15 +155,12 @@ int main(int argc, char *argv[])
   make_log(ins, solution, output_name, comp_time_ms, map_name, seed, log_short);
 */
 
-  // PairWiseHeuristic::test();
   // merge_goal_folder("/home/galko/dev/mapf_db/maze-32-32-2.N-399", "/home/galko/dev/mapf_db/maze_goals");
 
-  auto pair_wise_h = PairWiseHeuristic(ins.G, "maze-32-32-2.N-399");
-  pair_wise_h.load_some(&ins, 1, 7);
-  { std::string _; std::getline(std::cin, _); }
-//   pair_wise_h.construct_for_instance_only_goals(ins.goals);
+  auto pair_wise = PairWiseHeuristic(ins.G, "maze-32-32-2.N-399");
+  PairWiseHeuristic::test();
+  pair_wise.integration_test();
 
-  // to_csv("/home/galko/dev/mapf_db/maze-32-32-2.N-399/97_664.bin", "/home/galko/97_664.csv");
 
 //   Config starts = { ins.G->V[595], ins.G->V[507] };
 //   Config goals =  { ins.G->V[97] , ins.G->V[664] };
