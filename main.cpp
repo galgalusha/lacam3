@@ -158,7 +158,7 @@ int main(int argc, char *argv[])
   // merge_goal_folder("/home/galko/dev/mapf_db/maze-32-32-2.N-399", "/home/galko/dev/mapf_db/maze_goals");
 
   auto pair_wise_h = PairWiseHeuristic(ins.G, "maze-32-32-2.N-399");
-  pair_wise_h.load_some(&ins, 3);
+  pair_wise_h.load_some(&ins, 1, 7);
   { std::string _; std::getline(std::cin, _); }
 //   pair_wise_h.construct_for_instance_only_goals(ins.goals);
 

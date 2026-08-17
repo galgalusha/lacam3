@@ -9,18 +9,20 @@
 #include <array>
 #include <cstdint>
 #include <unordered_set>
+#include <mutex>
 
 struct PairWiseHeuristic {
   Graph *G;
   std::string name;
   DistTable* D;
   std::array<absl::flat_hash_map<uint32_t, uint8_t>, 256> pair_data;
+  std::array<std::mutex, 256> pair_data_mtx;
 
   PairWiseHeuristic(Graph *G, std::string _name);
   void construct();
   void construct_for_instance(const Config& goals);
   void load_all(Instance* ins);
-  void load_some(Instance* ins, int margin);
+  void load_some(Instance* ins, int margin, int num_of_threads);
   void load_bin_file(uint16_t lo, uint16_t hi, const std::string& path);
   void load_bin_file_filtered(uint16_t lo, uint16_t hi, const std::string& path,
                                bool nearest_is_lo, const std::unordered_set<int>& vertex_set);

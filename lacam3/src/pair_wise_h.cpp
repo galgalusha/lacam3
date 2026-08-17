@@ -649,43 +649,61 @@ void PairWiseHeuristic::load_bin_file_filtered(uint16_t lo, uint16_t hi, const s
     }
     JointKey jk = to_joint_key(lo, hi, entry.i_start, entry.j_start);
     uint8_t idx = (uint8_t)(jk >> 32);
+    std::lock_guard<std::mutex> lock(pair_data_mtx[idx]);
     uint32_t mk = (uint32_t)(jk & 0xFFFFFFFF);
     pair_data[idx][mk] = dh;
   }
 }
 
-void PairWiseHeuristic::load_some(Instance* ins, int margin) {
+void PairWiseHeuristic::load_some(Instance* ins, int margin, int num_of_threads) {
   const int N = (int)ins->goals.size();
   const int total = N * (N - 1) / 2;
-  int done = 0;
+  std::atomic<int> done = 0;
   const int bar_width = 40;
-  const auto print_bar = [&]() {
+
+  auto print_bar = [&]() {
     float frac = total > 0 ? (float)done / total : 1.0f;
     int filled = (int)(frac * bar_width);
     std::cout << "\r[";
     for (int k = 0; k < bar_width; ++k) std::cout << (k < filled ? '#' : '-');
-    std::cout << "] " << done << "/" << total << std::flush;
+    std::cout << "] " << std::fixed << std::setprecision(2) << (frac * 100) << "%" << std::flush;
   };
+
   print_bar();
+
+  ThreadPool pool(num_of_threads);
+  std::mutex mtx;
+
+  std::vector<std::future<ThreadResult>> futures;
+
   for (int i = 0; i < N; ++i) {
     for (int j = i + 1; j < N; ++j) {
-      const int dist_i = D->get(ins->goals[i]->id, ins->starts[i]->id);
-      const int dist_j = D->get(ins->goals[j]->id, ins->starts[j]->id);
-      const int nearest = (dist_i <= dist_j) ? i : j;
+      futures.push_back(pool.submit([&, i, j]() {
+        const int dist_i = D->get(ins->goals[i]->id, ins->starts[i]->id);
+        const int dist_j = D->get(ins->goals[j]->id, ins->starts[j]->id);
+        const int nearest = (dist_i <= dist_j) ? i : j;
 
-      const uint16_t gi = (uint16_t)ins->goals[i]->id;
-      const uint16_t gj = (uint16_t)ins->goals[j]->id;
-      const uint16_t lo = std::min(gi, gj), hi = std::max(gi, gj);
-      // nearest_is_lo: nearest agent's goal is the smaller of the two (lo side in DB)
-      const bool nearest_is_lo = (ins->goals[nearest]->id == lo);
+        const uint16_t gi = (uint16_t)ins->goals[i]->id;
+        const uint16_t gj = (uint16_t)ins->goals[j]->id;
+        const uint16_t lo = std::min(gi, gj), hi = std::max(gi, gj);
+        const bool nearest_is_lo = (ins->goals[nearest]->id == lo);
 
-      const auto vertex_set = bfs_with_margin(ins->starts[nearest], ins->goals[nearest], margin);
-      const std::string path = DB_PATH + name + "/" + std::to_string(lo) + "_" + std::to_string(hi) + ".bin";
-      load_bin_file_filtered(lo, hi, path, nearest_is_lo, vertex_set);
-      ++done;
-      print_bar();
+        const auto vertex_set = bfs_with_margin(ins->starts[nearest], ins->goals[nearest], margin);
+        const std::string path = DB_PATH + name + "/" + std::to_string(lo) + "_" + std::to_string(hi) + ".bin";
+
+        load_bin_file_filtered(lo, hi, path, nearest_is_lo, vertex_set);
+        
+        done++;
+        print_bar();
+        return ThreadResult{};
+      }));
     }
   }
+
+  for(auto& fut : futures) {
+    fut.get();
+  }
+
   std::cout << std::endl;
 }
 
