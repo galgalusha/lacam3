@@ -1,4 +1,4 @@
-#include "../include/pair_wise_h.hpp"
+#include "../include/pair_wise_db.hpp"
 #include "../include/pair_wise_bin.hpp"
 
 #include <atomic>

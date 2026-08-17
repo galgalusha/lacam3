@@ -1,4 +1,4 @@
-#include "../include/pair_wise_h.hpp"
+#include "../include/pair_wise_db.hpp"
 
 
 static DistTable* create_dist_table(Graph* G) {
