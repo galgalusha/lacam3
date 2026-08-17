@@ -16,8 +16,8 @@ FetchContent_MakeAvailable(absl)
 
 add_executable(main main.cpp)
 target_compile_features(main PUBLIC cxx_std_17)
-target_compile_options(main PRIVATE -O3 -march=native -DNDEBUG -ffast-math -funroll-loops -fomit-frame-pointer)
-target_link_options(main PRIVATE -flto)
+# target_compile_options(main PRIVATE -O3 -march=native -DNDEBUG -ffast-math -funroll-loops -fomit-frame-pointer)
+# target_link_options(main PRIVATE -flto)
 target_link_libraries(main lacam3 argparse)
 
 # test
