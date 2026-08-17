@@ -76,7 +76,9 @@ struct ThreadPool {
   }
 };
 
-PairWiseHeuristic::PairWiseHeuristic(Graph* _G, std::string _name) : G(_G), name(_name) {}
+static DistTable* create_dist_table(Graph* G);
+
+PairWiseHeuristic::PairWiseHeuristic(Graph* _G, std::string _name) : G(_G), name(_name), D(create_dist_table(_G)) {}
 
 std::unordered_set<PairKey> PairWiseHeuristic::get_keys_from_files() {
   std::unordered_set<PairKey> keys;
@@ -332,15 +334,10 @@ void populate_zero_dh_by_bfs(DistTable* D, Vertex* i_goal, Vertex* j_goal) {
 }
 
 void PairWiseHeuristic::construct() { 
-  // 1. Create the APSP (All-Pairs Shortest Path) distance table
-  Config all_vertices = G->V;
-  std::cout << "Creating dist table... " << std::flush;
-  DistTable* D = create_dist_table(G);
-  std::cout << "Done" << std::endl;
+  const int num_vertices = G->V.size();
 
   long long count_evaluated = 0;
   long long count_interfering = 0;
-  const int num_vertices = G->V.size();
   shared_zero_dh_gen = std::vector<uint32_t>(num_vertices * num_vertices, 0);
 
   // 2. Iterate over all valid 4-tuples (i_start, i_goal, j_start, j_goal)
@@ -415,15 +412,9 @@ void PairWiseHeuristic::construct() {
   std::cout << "\r[" << std::string(50, '#') << "] 100%" << std::endl;
   std::cout << "Total 4-tuples evaluated: " << count_evaluated << std::endl;
   std::cout << "Pairs flagged for A*:     " << count_interfering << std::endl;
-
-  // Cleanup to prevent memory leaks during offline pre-processing
-  delete D;
 }
 
 void PairWiseHeuristic::construct_for_instance(const Config& goals) {
-  std::cout << "Creating dist table... " << std::flush;
-  DistTable* D = create_dist_table(G);
-  std::cout << "Done" << std::endl;
 
   long long count_evaluated = 0;
   long long count_interfering = 0;
@@ -504,16 +495,10 @@ void PairWiseHeuristic::construct_for_instance(const Config& goals) {
   std::cout << "\r[" << std::string(50, '#') << "] 100%" << std::endl;
   std::cout << "Total 4-tuples evaluated: " << count_evaluated << std::endl;
   std::cout << "Pairs flagged for A*:     " << count_interfering << std::endl;
-
-  delete D;
 }
 
 void PairWiseHeuristic::construct_for_instance_only_goals(const Config& goals) {
-  std::cout << "Creating dist table... " << std::flush;
-  DistTable* D = create_dist_table(G);
-  std::cout << "Done" << std::endl;
 
-  const int num_vertices = G->V.size();
   const int K = (int)goals.size();
 
   long long total_outer = (long long)K * (K - 1) / 2;
@@ -594,7 +579,6 @@ void PairWiseHeuristic::construct_for_instance_only_goals(const Config& goals) {
     }
   }
   std::cout << "\r[" << std::string(50, '#') << "] 100%" << std::endl;
-  delete D;
 }
 
 void PairWiseHeuristic::load_bin_file(uint16_t lo, uint16_t hi, const std::string& path) {
@@ -616,7 +600,7 @@ void PairWiseHeuristic::load_bin_file(uint16_t lo, uint16_t hi, const std::strin
   }
 }
 
-void PairWiseHeuristic::load(Instance* ins) {
+void PairWiseHeuristic::load_all(Instance* ins) {
   int N = (int)ins->goals.size();
   for (int i = 0; i < N; ++i) {
     for (int j = i + 1; j < N; ++j) {
@@ -627,6 +611,82 @@ void PairWiseHeuristic::load(Instance* ins) {
       load_bin_file(lo, hi, path);
     }
   }
+}
+
+std::unordered_set<int> PairWiseHeuristic::bfs_with_margin(Vertex* start, Vertex* goal, int margin) const {
+  const int optimal = D->get(goal->id, start->id);
+  std::unordered_set<int> explored;
+  std::queue<Vertex*> open;
+  explored.insert(start->id);
+  open.push(start);
+  while (!open.empty()) {
+    Vertex* v = open.front(); open.pop();
+    for (Vertex* nb : v->neighbor) {
+      if (explored.count(nb->id)) continue;
+      if (D->get(goal->id, nb->id) <= optimal + margin) {
+        explored.insert(nb->id);
+        open.push(nb);
+      }
+    }
+  }
+  return explored;
+}
+
+void PairWiseHeuristic::load_bin_file_filtered(uint16_t lo, uint16_t hi, const std::string& path,
+                                                bool nearest_is_lo, const std::unordered_set<int>& vertex_set) {
+  std::ifstream f(path, std::ios::binary);
+  if (!f) return;
+  PairEntry entry;
+  while (f.read(reinterpret_cast<char*>(&entry), sizeof(PairEntry))) {
+    // only load entries where nearest_agent's start is within the margin set
+    int nearest_start = nearest_is_lo ? entry.i_start : entry.j_start;
+    if (!vertex_set.count(nearest_start)) continue;
+    uint8_t dh;
+    if (entry.dh > 255) {
+      dh = 255;
+    } else {
+      dh = (uint8_t)entry.dh;
+    }
+    JointKey jk = to_joint_key(lo, hi, entry.i_start, entry.j_start);
+    uint8_t idx = (uint8_t)(jk >> 32);
+    uint32_t mk = (uint32_t)(jk & 0xFFFFFFFF);
+    pair_data[idx][mk] = dh;
+  }
+}
+
+void PairWiseHeuristic::load_some(Instance* ins, int margin) {
+  const int N = (int)ins->goals.size();
+  const int total = N * (N - 1) / 2;
+  int done = 0;
+  const int bar_width = 40;
+  const auto print_bar = [&]() {
+    float frac = total > 0 ? (float)done / total : 1.0f;
+    int filled = (int)(frac * bar_width);
+    std::cout << "\r[";
+    for (int k = 0; k < bar_width; ++k) std::cout << (k < filled ? '#' : '-');
+    std::cout << "] " << done << "/" << total << std::flush;
+  };
+  print_bar();
+  for (int i = 0; i < N; ++i) {
+    for (int j = i + 1; j < N; ++j) {
+      const int dist_i = D->get(ins->goals[i]->id, ins->starts[i]->id);
+      const int dist_j = D->get(ins->goals[j]->id, ins->starts[j]->id);
+      const int nearest = (dist_i <= dist_j) ? i : j;
+
+      const uint16_t gi = (uint16_t)ins->goals[i]->id;
+      const uint16_t gj = (uint16_t)ins->goals[j]->id;
+      const uint16_t lo = std::min(gi, gj), hi = std::max(gi, gj);
+      // nearest_is_lo: nearest agent's goal is the smaller of the two (lo side in DB)
+      const bool nearest_is_lo = (ins->goals[nearest]->id == lo);
+
+      const auto vertex_set = bfs_with_margin(ins->starts[nearest], ins->goals[nearest], margin);
+      const std::string path = DB_PATH + name + "/" + std::to_string(lo) + "_" + std::to_string(hi) + ".bin";
+      load_bin_file_filtered(lo, hi, path, nearest_is_lo, vertex_set);
+      ++done;
+      print_bar();
+    }
+  }
+  std::cout << std::endl;
 }
 
 uint8_t PairWiseHeuristic::get(uint16_t i_goal, uint16_t j_goal, uint16_t i_start, uint16_t j_start) const {
@@ -755,7 +815,7 @@ void PairWiseHeuristic::test() {
 
   PairWiseHeuristic pwh(G, test2);
   Instance* ins = new Instance(G, starts, goals, starts.size());
-  pwh.load(ins);
+  pwh.load_all(ins);
 
   std::cout << "A with B: " << (int)pwh.get(A_goal->id, B_goal->id, A_start->id, B_start->id) << std::endl;
   std::cout << "A with C: " << (int)pwh.get(A_goal->id, C_goal->id, A_start->id, C_start->id) << std::endl;
