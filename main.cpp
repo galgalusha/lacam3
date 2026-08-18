@@ -158,10 +158,14 @@ int main(int argc, char *argv[])
 
   // merge_goal_folder("/home/galko/dev/mapf_db/maze-32-32-2.N-399", "/home/galko/dev/mapf_db/maze_goals");
 
-  auto pair_db = PairWiseDB(ins.G, "maze-32-32-2.N-399");
-  pair_db.load_all(&ins);
-//   PairWiseDB::test();
-//   pair_wise.integration_test();
+auto pair_db = PairWiseDB(ins.G, "maze-32-32-2.N-399");
+pair_db.test_interactive(&ins);
+   // pair_db.load_all2(&ins);
+//   std::cout << "loading bin files" << std::endl;
+//   pair_db.load_all(&ins);
+//   std::cout << "writing bin2 files" << std::endl;
+//   pair_db.write_bin2_files();
+  // pair_db.integration_test();
 
 
 //   Config starts = { ins.G->V[595], ins.G->V[507] };

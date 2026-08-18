@@ -126,5 +126,5 @@ struct PairWiseDB {
   void write_bin2_files();
   void load_all2(Instance* ins);
   void load_bin2_file(uint16_t lo, uint16_t hi);
-  void test_interactive();
+  void test_interactive(Instance* ins);
 };
