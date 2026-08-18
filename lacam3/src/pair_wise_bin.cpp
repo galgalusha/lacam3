@@ -5,13 +5,13 @@
 #include <stdexcept>
 #include <string>
 
-void append_entries(const std::string& path, const std::vector<PairEntry>& entries) {
+void append_entries(const std::string& path, const std::vector<BinEntry>& entries) {
   if (entries.empty()) return;
   std::ofstream f(path, std::ios::binary | std::ios::app);
   if (!f) throw std::runtime_error("Cannot open file: " + path);
   // PairEntry is a POD-like struct; write raw bytes for cheap append
   f.write(reinterpret_cast<const char*>(entries.data()),
-          static_cast<std::streamsize>(entries.size() * sizeof(PairEntry)));
+          static_cast<std::streamsize>(entries.size() * sizeof(BinEntry)));
 }
 
 void to_csv(const std::string& bin_path, const std::string& csv_path) {
@@ -20,22 +20,22 @@ void to_csv(const std::string& bin_path, const std::string& csv_path) {
   std::ofstream out(csv_path);
   if (!out) throw std::runtime_error("Cannot open file: " + csv_path);
   out << "i_start,j_start,dh\n";
-  PairEntry e;
-  while (in.read(reinterpret_cast<char*>(&e), sizeof(PairEntry))) {
+  BinEntry e;
+  while (in.read(reinterpret_cast<char*>(&e), sizeof(BinEntry))) {
     out << e.i_start << ',' << e.j_start << ',' << e.dh << '\n';
   }
 }
 
-static auto entry_key(const PairEntry& e) {
-  return to_key(e.i_start, e.j_start);
+static auto entry_key(const BinEntry& e) {
+  return to_bin_key(e.i_start, e.j_start);
 }
 
-static std::vector<PairEntry> read_all(const std::string& path) {
+static std::vector<BinEntry> read_all(const std::string& path) {
   std::ifstream f(path, std::ios::binary);
   if (!f) return {};
-  std::vector<PairEntry> v;
-  PairEntry e;
-  while (f.read(reinterpret_cast<char*>(&e), sizeof(PairEntry)))
+  std::vector<BinEntry> v;
+  BinEntry e;
+  while (f.read(reinterpret_cast<char*>(&e), sizeof(BinEntry)))
     v.push_back(e);
   return v;
 }
@@ -67,19 +67,19 @@ void merge_goal_folder(const std::string& base_dir, const std::string& goal_dir)
       auto bk = entry_key(base[bi]);
       auto gk = entry_key(goal[gi]);
       if (bk < gk) {
-        out.write(reinterpret_cast<const char*>(&base[bi++]), sizeof(PairEntry));
+        out.write(reinterpret_cast<const char*>(&base[bi++]), sizeof(BinEntry));
       } else if (gk < bk) {
-        out.write(reinterpret_cast<const char*>(&goal[gi++]), sizeof(PairEntry));
+        out.write(reinterpret_cast<const char*>(&goal[gi++]), sizeof(BinEntry));
       } else {
         // equal key: goal overrides base
-        out.write(reinterpret_cast<const char*>(&goal[gi++]), sizeof(PairEntry));
+        out.write(reinterpret_cast<const char*>(&goal[gi++]), sizeof(BinEntry));
         ++bi;
       }
     }
     while (bi < base.size())
-      out.write(reinterpret_cast<const char*>(&base[bi++]), sizeof(PairEntry));
+      out.write(reinterpret_cast<const char*>(&base[bi++]), sizeof(BinEntry));
     while (gi < goal.size())
-      out.write(reinterpret_cast<const char*>(&goal[gi++]), sizeof(PairEntry));
+      out.write(reinterpret_cast<const char*>(&goal[gi++]), sizeof(BinEntry));
     out.close();
 
     std::filesystem::rename(tmp_path, base_path);

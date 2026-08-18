@@ -9,7 +9,7 @@
 #include <iostream>
 
 
-std::unordered_set<PairKey> PairWiseHeuristic::get_keys_from_files() {
+std::unordered_set<PairKey> PairWiseDB::get_keys_from_files() {
   std::unordered_set<PairKey> keys;
   if (!std::filesystem::exists(DB_PATH + name)) return keys;
   for (const auto& entry : std::filesystem::directory_iterator(DB_PATH + name)) {
@@ -17,12 +17,12 @@ std::unordered_set<PairKey> PairWiseHeuristic::get_keys_from_files() {
     if (fname.rfind("tmp_", 0) == 0) continue;
     int lo, hi;
     if (std::sscanf(fname.c_str(), "%d_%d.bin", &lo, &hi) == 2)
-      keys.insert(to_key((uint16_t)lo, (uint16_t)hi));
+      keys.insert(to_bin_key((uint16_t)lo, (uint16_t)hi));
   }
   return keys;
 }
 
-void PairWiseHeuristic::construct() {
+void PairWiseDB::construct() {
   const int num_vertices = G->V.size();
 
   long long count_evaluated = 0;
@@ -36,7 +36,7 @@ void PairWiseHeuristic::construct() {
   ThreadPool pool(NUM_OF_THREADS);
   for (int i_g = 0; i_g < num_vertices; ++i_g) {
     for (int j_g = i_g + 1; j_g < num_vertices; ++j_g, ++outer_idx) {
-      if (done_keys.count(to_key((uint16_t)i_g, (uint16_t)j_g))) continue;
+      if (done_keys.count(to_bin_key((uint16_t)i_g, (uint16_t)j_g))) continue;
       int pct = (int)(outer_idx * 100000 / total_outer);
       if (pct != last_pct) {
         last_pct = pct;
@@ -100,7 +100,7 @@ void PairWiseHeuristic::construct() {
   std::cout << "Pairs flagged for A*:     " << count_interfering << std::endl;
 }
 
-void PairWiseHeuristic::construct_for_instance(const Config& goals) {
+void PairWiseDB::construct_for_instance(const Config& goals) {
   long long count_evaluated = 0;
   long long count_interfering = 0;
   const int num_vertices = G->V.size();
@@ -116,7 +116,7 @@ void PairWiseHeuristic::construct_for_instance(const Config& goals) {
     for (int agent2 = agent1 + 1; agent2 < K; ++agent2, ++outer_idx) {
       int i_g = std::min(goals[agent1]->id, goals[agent2]->id);
       int j_g = std::max(goals[agent1]->id, goals[agent2]->id);
-      if (done_keys.count(to_key((uint16_t)i_g, (uint16_t)j_g))) continue;
+      if (done_keys.count(to_bin_key((uint16_t)i_g, (uint16_t)j_g))) continue;
 
       int pct = (int)(outer_idx * 100000 / total_outer);
       if (pct != last_pct) {
@@ -182,7 +182,7 @@ void PairWiseHeuristic::construct_for_instance(const Config& goals) {
   std::cout << "Pairs flagged for A*:     " << count_interfering << std::endl;
 }
 
-void PairWiseHeuristic::construct_for_instance_only_goals(const Config& goals) {
+void PairWiseDB::construct_for_instance_only_goals(const Config& goals) {
   const int K = (int)goals.size();
 
   long long total_outer = (long long)K * (K - 1) / 2;
@@ -245,12 +245,12 @@ void PairWiseHeuristic::construct_for_instance_only_goals(const Config& goals) {
         }));
       }
 
-      std::vector<PairEntry> all_entries;
+      std::vector<BinEntry> all_entries;
       for (auto& fut : futures) {
         auto [entries, evaluated] = fut.get();
         all_entries.insert(all_entries.end(), entries.begin(), entries.end());
       }
-      std::sort(all_entries.begin(), all_entries.end(), [](const PairEntry& a, const PairEntry& b) {
+      std::sort(all_entries.begin(), all_entries.end(), [](const BinEntry& a, const BinEntry& b) {
         if (a.i_start != b.i_start) return a.i_start < b.i_start;
         return a.j_start < b.j_start;
       });

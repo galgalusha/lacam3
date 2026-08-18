@@ -5,6 +5,7 @@
 #include <pair_wise_db.hpp>
 #include <drawing.hpp>
 
+
 int main(int argc, char *argv[])
 {
   // arguments parser
@@ -157,9 +158,10 @@ int main(int argc, char *argv[])
 
   // merge_goal_folder("/home/galko/dev/mapf_db/maze-32-32-2.N-399", "/home/galko/dev/mapf_db/maze_goals");
 
-  auto pair_wise = PairWiseHeuristic(ins.G, "maze-32-32-2.N-399");
-  PairWiseHeuristic::test();
-  pair_wise.integration_test();
+  auto pair_db = PairWiseDB(ins.G, "maze-32-32-2.N-399");
+  pair_db.load_all(&ins);
+//   PairWiseDB::test();
+//   pair_wise.integration_test();
 
 
 //   Config starts = { ins.G->V[595], ins.G->V[507] };

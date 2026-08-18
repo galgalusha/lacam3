@@ -1,91 +1,95 @@
 #include "../include/pair_wise_db.hpp"
 #include "../include/pair_wise_bin.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
-#include <queue>
-#include <unordered_set>
+#include <set>
 
 
-std::unordered_set<int> PairWiseHeuristic::bfs_with_margin(Vertex* start, Vertex* goal, int margin) const {
-  const int optimal = D->get(goal->id, start->id);
-  std::unordered_set<int> explored;
-  std::queue<Vertex*> open;
-  explored.insert(start->id);
-  open.push(start);
-  while (!open.empty()) {
-    Vertex* v = open.front(); open.pop();
-    for (Vertex* nb : v->neighbor) {
-      if (explored.count(nb->id)) continue;
-      if (D->get(goal->id, nb->id) <= optimal + margin) {
-        explored.insert(nb->id);
-        open.push(nb);
-      }
-    }
-  }
-  return explored;
-}
-
-void PairWiseHeuristic::load_bin_file(uint16_t lo, uint16_t hi, const std::string& path) {
+void PairWiseDB::load_bin_file(uint16_t lo, uint16_t hi) {
+  auto path = bin_file_name(lo, hi);
   std::ifstream f(path, std::ios::binary);
   if (!f) return;
-  PairEntry entry;
-  while (f.read(reinterpret_cast<char*>(&entry), sizeof(PairEntry))) {
-    uint8_t dh;
-    if (entry.dh > 255) {
-      std::cout << "[pair_wise_h] warning: dh value " << entry.dh << " exceeds 255, trimming to 255" << std::endl;
-      dh = 255;
+
+  GoalsKey goals_key = to_goals_key(lo, hi);
+
+  // Build RangeEntries locally from the sorted BinEntry stream (no shared state touched here)
+  std::array<std::vector<RangeEntry>, MAX_VERTICES> local{};
+
+  BinEntry entry;
+  bool have_run = false;
+  uint16_t run_i, run_j_start, run_next_j;
+  uint8_t  run_dh, run_range;
+
+  auto flush_run = [&]() {
+    local[run_i].push_back({run_j_start, run_range, run_dh});
+  };
+
+  while (f.read(reinterpret_cast<char*>(&entry), sizeof(BinEntry))) {
+    uint8_t dh = entry.dh > 255 ? 255 : (uint8_t)entry.dh;
+    // Extend current run if same i_start, same dh, consecutive j_start, and range not saturated
+    bool extends = have_run && entry.i_start == run_i && dh == run_dh &&
+                   entry.j_start == run_next_j && run_range < 255;
+    if (extends) {
+      run_next_j++;
+      run_range++;
     } else {
-      dh = (uint8_t)entry.dh;
+      if (have_run) flush_run();
+      run_i      = entry.i_start;
+      run_j_start = entry.j_start;
+      run_next_j  = (uint16_t)(entry.j_start + 1);
+      run_dh      = dh;
+      run_range   = 1;
+      have_run    = true;
     }
-    JointKey jk = to_joint_key(lo, hi, entry.i_start, entry.j_start);
-    uint8_t idx = (uint8_t)(jk >> 32);
-    uint32_t mk = (uint32_t)(jk & 0xFFFFFFFF);
-    pair_data[idx][mk] = dh;
+  }
+  if (have_run) flush_run();
+
+  // Merge into pair_data under the stripe mutex (ensure mutexes are initialized)
+  if (goals_key_mutexes.empty()) goals_key_mutexes = std::vector<std::mutex>(1);
+  size_t mutex_idx = goals_key % goals_key_mutexes.size();
+  std::lock_guard<std::mutex> lock(goals_key_mutexes[mutex_idx]);
+  auto& sa = pair_data[goals_key];
+  for (size_t i = 0; i < MAX_VERTICES; ++i) {
+    auto& src = local[i];
+    if (src.empty()) continue;
+    auto& dst = sa[i];
+    dst.insert(dst.end(), src.begin(), src.end());
   }
 }
 
-void PairWiseHeuristic::load_bin_file_filtered(uint16_t lo, uint16_t hi, const std::string& path,
-                                                bool nearest_is_lo, const std::unordered_set<int>& vertex_set) {
-  std::ifstream f(path, std::ios::binary);
-  if (!f) return;
-  PairEntry entry;
-  while (f.read(reinterpret_cast<char*>(&entry), sizeof(PairEntry))) {
-    int nearest_start = nearest_is_lo ? entry.i_start : entry.j_start;
-    if (!vertex_set.count(nearest_start)) continue;
-    uint8_t dh;
-    if (entry.dh > 255) {
-      dh = 255;
-    } else {
-      dh = (uint8_t)entry.dh;
-    }
-    JointKey jk = to_joint_key(lo, hi, entry.i_start, entry.j_start);
-    uint8_t idx = (uint8_t)(jk >> 32);
-    std::lock_guard<std::mutex> lock(pair_data_mtx[idx]);
-    uint32_t mk = (uint32_t)(jk & 0xFFFFFFFF);
-    pair_data[idx][mk] = dh;
-  }
-}
 
-void PairWiseHeuristic::load_all(Instance* ins) {
+void PairWiseDB::load_all(Instance* ins) {
+  // Size goals_key_mutexes by the number of bin files on disk
+  size_t num_files = 0;
+  std::string db_dir = DB_PATH + name;
+  if (std::filesystem::exists(db_dir)) {
+    for (const auto& e : std::filesystem::directory_iterator(db_dir)) {
+      int lo, hi;
+      if (std::sscanf(e.path().filename().string().c_str(), "%d_%d.bin", &lo, &hi) == 2)
+        ++num_files;
+    }
+  }
+  goals_key_mutexes = std::vector<std::mutex>(std::max((size_t)1, num_files));
+
+  // Collect unique (lo, hi) pairs for this instance
+  std::set<std::pair<uint16_t, uint16_t>> file_set;
   int N = (int)ins->goals.size();
-  for (int i = 0; i < N; ++i) {
+  for (int i = 0; i < N; ++i)
     for (int j = i + 1; j < N; ++j) {
-      uint16_t gi = (uint16_t)ins->goals[i]->id;
-      uint16_t gj = (uint16_t)ins->goals[j]->id;
-      uint16_t lo = std::min(gi, gj), hi = std::max(gi, gj);
-      std::string path = DB_PATH + name + "/" + std::to_string(lo) + "_" + std::to_string(hi) + ".bin";
-      load_bin_file(lo, hi, path);
+      uint16_t gi = (uint16_t)ins->goals[i]->id, gj = (uint16_t)ins->goals[j]->id;
+      file_set.insert({std::min(gi, gj), std::max(gi, gj)});
     }
-  }
-}
 
-void PairWiseHeuristic::load_some(Instance* ins, int margin, int num_of_threads) {
-  const int N = (int)ins->goals.size();
-  const int total = N * (N - 1) / 2;
+  // Pre-populate pair_data keys single-threaded so threads never insert into the outer map
+  for (auto [lo, hi] : file_set)
+    pair_data[to_goals_key(lo, hi)]; // default-constructs StartArrays in-place
+
+  const int total = (int)file_set.size();
   std::atomic<int> done = 0;
   const int bar_width = 40;
 
@@ -99,35 +103,19 @@ void PairWiseHeuristic::load_some(Instance* ins, int margin, int num_of_threads)
 
   print_bar();
 
-  ThreadPool pool(num_of_threads);
-
+  ThreadPool pool(NUM_OF_THREADS);
   std::vector<std::future<ThreadResult>> futures;
 
-  for (int i = 0; i < N; ++i) {
-    for (int j = i + 1; j < N; ++j) {
-      futures.push_back(pool.submit([&, i, j]() {
-        const int dist_i = D->get(ins->goals[i]->id, ins->starts[i]->id);
-        const int dist_j = D->get(ins->goals[j]->id, ins->starts[j]->id);
-        const int nearest = (dist_i <= dist_j) ? i : j;
-
-        const uint16_t gi = (uint16_t)ins->goals[i]->id;
-        const uint16_t gj = (uint16_t)ins->goals[j]->id;
-        const uint16_t lo = std::min(gi, gj), hi = std::max(gi, gj);
-        const bool nearest_is_lo = (ins->goals[nearest]->id == lo);
-
-        const auto vertex_set = bfs_with_margin(ins->starts[nearest], ins->goals[nearest], margin);
-        const std::string path = DB_PATH + name + "/" + std::to_string(lo) + "_" + std::to_string(hi) + ".bin";
-
-        load_bin_file_filtered(lo, hi, path, nearest_is_lo, vertex_set);
-
-        done++;
-        print_bar();
-        return ThreadResult{};
-      }));
-    }
+  for (auto [lo, hi] : file_set) {
+    futures.push_back(pool.submit([&, lo, hi]() {
+      load_bin_file(lo, hi);
+      done++;
+      print_bar();
+      return ThreadResult{};
+    }));
   }
-
   for (auto& fut : futures) fut.get();
-
   std::cout << std::endl;
 }
+
+

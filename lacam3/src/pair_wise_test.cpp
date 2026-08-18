@@ -8,7 +8,7 @@
 #include <random>
 
 
-void PairWiseHeuristic::integration_test() {
+void PairWiseDB::integration_test() {
   std::string dir = DB_PATH + name;
   if (!std::filesystem::exists(dir)) {
     std::cout << "[integration_test] directory not found: " << dir << std::endl;
@@ -40,11 +40,11 @@ void PairWiseHeuristic::integration_test() {
     std::sscanf(fname.c_str(), "%d_%d.bin", &lo_i, &hi_i);
     uint16_t lo = (uint16_t)lo_i, hi = (uint16_t)hi_i;
 
-    load_bin_file(lo, hi, fpath.string());
+    load_bin_file(lo, hi);
 
     std::ifstream f(fpath.string(), std::ios::binary);
-    PairEntry entry;
-    while (f.read(reinterpret_cast<char*>(&entry), sizeof(PairEntry))) {
+    BinEntry entry;
+    while (f.read(reinterpret_cast<char*>(&entry), sizeof(BinEntry))) {
       uint8_t expected = entry.dh > 255 ? 255 : (uint8_t)entry.dh;
       uint8_t actual = get(hi, lo, entry.j_start, entry.i_start);
 
@@ -62,7 +62,7 @@ void PairWiseHeuristic::integration_test() {
       }
     }
 
-    for (auto& m : pair_data) m.clear();
+    pair_data.clear();
   }
 
   std::cout << "[integration_test] Results over " << files.size() << " file(s):" << std::endl;
@@ -78,7 +78,7 @@ void PairWiseHeuristic::integration_test() {
   }
 }
 
-void PairWiseHeuristic::test() {
+void PairWiseDB::test() {
   std::vector<std::string> grid = {
     "....",
     "....",
@@ -107,13 +107,13 @@ void PairWiseHeuristic::test() {
 
   std::string test2 = "test2";
   std::string test2_goals = "test2_goals";
-  PairWiseHeuristic pwh_no_goals(G, test2);
+  PairWiseDB pwh_no_goals(G, test2);
   pwh_no_goals.construct_for_instance(goals);
-  PairWiseHeuristic pwh_goals(G, test2_goals);
+  PairWiseDB pwh_goals(G, test2_goals);
   pwh_goals.construct_for_instance_only_goals(goals);
   merge_goal_folder(DB_PATH + test2, DB_PATH + test2_goals);
 
-  PairWiseHeuristic pwh(G, test2);
+  PairWiseDB pwh(G, test2);
   Instance* ins = new Instance(G, starts, goals, starts.size());
   pwh.load_all(ins);
 

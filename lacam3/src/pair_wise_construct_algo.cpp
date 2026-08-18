@@ -100,7 +100,7 @@ int joint_astar(DistTable* D, Vertex* i_start, Vertex* i_goal, Vertex* j_start, 
   return INT_MAX;
 }
 
-bool PairWiseHeuristic::can_interfere(DistTable* D, int i_start, int i_goal, int j_start, int j_goal) {
+bool PairWiseDB::can_interfere(DistTable* D, int i_start, int i_goal, int j_start, int j_goal) {
   int dist_s_ij  = D->get(j_start, i_start);
   int dist_g_ij  = D->get(j_goal,  i_goal);
   int dist_sg_ii = D->get(i_goal,  i_start);
@@ -120,7 +120,7 @@ bool PairWiseHeuristic::can_interfere(DistTable* D, int i_start, int i_goal, int
   return true;
 }
 
-bool PairWiseHeuristic::has_alternative_path(DistTable* D, Vertex* blocked, Vertex* v_s, Vertex* v_g) {
+bool PairWiseDB::has_alternative_path(DistTable* D, Vertex* blocked, Vertex* v_s, Vertex* v_g) {
   int target_dist = D->get(v_g->id, v_s->id);
   if (target_dist == D->K) return false;
   if (v_s == blocked) return false;

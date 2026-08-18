@@ -8,9 +8,9 @@
 #include <thread>
 #include <vector>
 
-struct PairEntry;
+struct BinEntry;
 
-struct ThreadResult { std::vector<PairEntry> entries; long long evaluated; };
+struct ThreadResult { std::vector<BinEntry> entries; long long evaluated; };
 
 struct ThreadPool {
   std::vector<std::thread> workers;
