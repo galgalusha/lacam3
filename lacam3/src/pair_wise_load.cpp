@@ -49,10 +49,6 @@ void PairWiseDB::load_bin_file(uint16_t lo, uint16_t hi) {
   }
   if (have_run) flush_run();
 
-  // Merge into pair_data under the stripe mutex (ensure mutexes are initialized)
-  if (goals_key_mutexes.empty()) goals_key_mutexes = std::vector<std::mutex>(1);
-  size_t mutex_idx = goals_key % goals_key_mutexes.size();
-  std::lock_guard<std::mutex> lock(goals_key_mutexes[mutex_idx]);
   auto& sa = pair_data[goals_key];
   for (size_t i = 0; i < MAX_VERTICES; ++i) {
     auto& src = local[i];
@@ -64,19 +60,8 @@ void PairWiseDB::load_bin_file(uint16_t lo, uint16_t hi) {
 
 
 void PairWiseDB::load_all(Instance* ins) {
-  // Size goals_key_mutexes by the number of bin files on disk
-  size_t num_files = 0;
-  std::string db_dir = DB_PATH + name;
-  if (std::filesystem::exists(db_dir)) {
-    for (const auto& e : std::filesystem::directory_iterator(db_dir)) {
-      int lo, hi;
-      if (std::sscanf(e.path().filename().string().c_str(), "%d_%d.bin", &lo, &hi) == 2)
-        ++num_files;
-    }
-  }
-  goals_key_mutexes = std::vector<std::mutex>(std::max((size_t)1, num_files));
-
   // Collect unique (lo, hi) pairs for this instance
+  std::cout << "Collecting goal pairs from bin files" << std::endl;
   std::set<std::pair<uint16_t, uint16_t>> file_set;
   int N = (int)ins->goals.size();
   for (int i = 0; i < N; ++i)
@@ -88,6 +73,8 @@ void PairWiseDB::load_all(Instance* ins) {
   // Pre-populate pair_data keys single-threaded so threads never insert into the outer map
   for (auto [lo, hi] : file_set)
     pair_data[to_goals_key(lo, hi)]; // default-constructs StartArrays in-place
+
+  std::cout << "Reading files" << std::endl;
 
   const int total = (int)file_set.size();
   std::atomic<int> done = 0;
@@ -116,6 +103,7 @@ void PairWiseDB::load_all(Instance* ins) {
   }
   for (auto& fut : futures) fut.get();
   std::cout << std::endl;
+  std::cout << "Pair DB loaded successfully" << std::endl;
 }
 
 

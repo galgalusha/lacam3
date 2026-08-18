@@ -107,7 +107,6 @@ struct PairWiseDB {
   std::string name;
   DistTable* D;
   PairData pair_data;
-  std::vector<std::mutex> goals_key_mutexes; 
 
   PairWiseDB(Graph *G, std::string _name);
   void construct();
