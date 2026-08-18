@@ -20,7 +20,8 @@ void PairWiseDB::integration_test() {
     const std::string fname = e.path().filename().string();
     if (fname.rfind("tmp_", 0) == 0) continue;
     int lo, hi;
-    if (std::sscanf(fname.c_str(), "%d_%d.bin", &lo, &hi) == 2)
+    if (std::sscanf(fname.c_str(), "%d_%d.bin", &lo, &hi) == 2
+        && e.path().extension() == ".bin")
       files.push_back(e.path());
   }
 
@@ -40,7 +41,8 @@ void PairWiseDB::integration_test() {
     std::sscanf(fname.c_str(), "%d_%d.bin", &lo_i, &hi_i);
     uint16_t lo = (uint16_t)lo_i, hi = (uint16_t)hi_i;
 
-    load_bin_file(lo, hi);
+    pair_data[to_goals_key(lo, hi)];
+    load_bin2_file(lo, hi);
 
     std::ifstream f(fpath.string(), std::ios::binary);
     BinEntry entry;
@@ -113,12 +115,19 @@ void PairWiseDB::test() {
   pwh_goals.construct_for_instance_only_goals(goals);
   merge_goal_folder(DB_PATH + test2, DB_PATH + test2_goals);
 
-  PairWiseDB pwh(G, test2);
   Instance* ins = new Instance(G, starts, goals, starts.size());
-  pwh.load_all(ins);
+
+  {
+    PairWiseDB pwh(G, test2);
+    pwh.load_all(ins);
+    pwh.write_bin2_files();
+  }
+
+  PairWiseDB pwh(G, test2);
+  pwh.load_all2(ins);
 
   std::cout << "A with B: " << (int)pwh.get(A_goal->id, B_goal->id, A_start->id, B_start->id) << std::endl;
   std::cout << "A with C: " << (int)pwh.get(A_goal->id, C_goal->id, A_start->id, C_start->id) << std::endl;
   std::cout << "B with C: " << (int)pwh.get(B_goal->id, C_goal->id, B_start->id, C_start->id) << std::endl;
-  std::cout << "Done 2" << std::endl;
+  std::cout << "Done version 2.0" << std::endl;
 }

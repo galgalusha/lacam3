@@ -24,6 +24,7 @@ uint8_t PairWiseDB::get(uint16_t i_goal, uint16_t j_goal, uint16_t i_start, uint
 
   auto it = pair_data.find(to_goals_key(lo, hi));
   if (it == pair_data.end()) return 0;
+  if (is >= MAX_VERTICES || js >= MAX_VERTICES) return 0;
   const auto& ranges = it->second[is];
   if (ranges.empty()) return 0;
 

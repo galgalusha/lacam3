@@ -123,4 +123,8 @@ struct PairWiseDB {
   std::string bin_file_name(uint16_t lo, uint16_t hi) {
     return DB_PATH + name + "/" + std::to_string(lo) + "_" + std::to_string(hi) + ".bin";
   };
+  void write_bin2_files();
+  void load_all2(Instance* ins);
+  void load_bin2_file(uint16_t lo, uint16_t hi);
+  void test_interactive();
 };

@@ -1,3 +1,14 @@
+//
+// How to construct a DB from scratch:
+// 1. The map size must be up to 32x32.
+// 2. construct_for_instance - generate bin files
+// 3. construct_for_instance_only_goals - in a differet name (folder)
+// 4. merge_goal_folder(bin_folder, goals_folder).
+//    this will merge the goals into the original bins
+// 5. create bin2 files: { load_all(&ins); write_bin2_files(); }
+// 6. delete the bin files leaving only the bin2 files
+//
+
 #include "../include/pair_wise_db.hpp"
 #include "../include/dist_table.hpp"
 #include "../include/pair_wise_bin.hpp"
