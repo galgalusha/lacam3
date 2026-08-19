@@ -87,8 +87,8 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
         Vertex* v_j_next = Q_to[j];
         current_penalty = pair_db->get(goal_i, goal_j, u_i->id, v_j_next->id);
       } 
-      // PART 2: Agent j has NOT MOVED YET (unplanned)
-      else {
+      // PART 2: Agent j has NOT MOVED YET (unplanned)  // DISABLED!
+      else if (false) {
         Vertex* v_j = Q_from[j];
         int min_j_penalty = std::numeric_limits<int>::max();
 
@@ -124,10 +124,6 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
 {
   const auto K = Q_from[i]->neighbor.size();
 
-  auto swap_agent = NO_AGENT;
-  if (flg_swap) {
-    swap_agent = is_swap_required_and_possible(i, Q_from, Q_to);
-  }
 
   // exploit scatter data
   Vertex *prioritized_vertex = nullptr;
@@ -148,21 +144,34 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
   C_next[i][K] = Q_from[i];
   dh_values[Q_from[i]->id] = 0;
 
-  if (pair_db != nullptr && swap_agent == NO_AGENT) fill_dh_values(i, C_next[i], K + 1, Q_from, Q_to);
 
   // sort, note: K + 1 is sufficient
   std::sort(C_next[i].begin(), C_next[i].begin() + K + 1,
             [&](Vertex *const v, Vertex *const u) {
               if (v == prioritized_vertex) return true;
               if (u == prioritized_vertex) return false;
-              return D->get(i, v) + tie_breakers[v->id] + dh_values[v->id] <
-                     D->get(i, u) + tie_breakers[u->id] + dh_values[u->id];
+              return D->get(i, v) + tie_breakers[v->id] <
+                     D->get(i, u) + tie_breakers[u->id];
             });
+
+  auto swap_agent = NO_AGENT;
+  if (flg_swap) {
+    swap_agent = is_swap_required_and_possible(i, Q_from, Q_to);
+  }
 
   // emulate swap
   if (swap_agent != NO_AGENT) {
     // reverse vertex scoring
     std::reverse(C_next[i].begin(), C_next[i].begin() + K + 1);
+  } else if (pair_db != nullptr) {
+    fill_dh_values(i, C_next[i], K + 1, Q_from, Q_to);
+  std::sort(C_next[i].begin(), C_next[i].begin() + K + 1,
+            [&](Vertex *const v, Vertex *const u) {
+              if (v == prioritized_vertex) return true;
+              if (u == prioritized_vertex) return false;
+              return D->get(i, v) + tie_breakers[v->id] + dh_values[v->id] <
+                     D->get(i, u) + tie_breakers[u->id] + dh_values[u->id];
+            });    
   }
 
   auto swap_operation = [&]() {
