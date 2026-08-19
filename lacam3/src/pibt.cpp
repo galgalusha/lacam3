@@ -1,5 +1,7 @@
 #include "../include/pibt.hpp"
 
+PairWiseDB* PIBT::pair_db = nullptr;
+
 PIBT::PIBT(const Instance *_ins, DistTable *_D, int seed, bool _flg_swap,
            Scatter *_scatter)
     : ins(_ins),
@@ -12,6 +14,7 @@ PIBT::PIBT(const Instance *_ins, DistTable *_D, int seed, bool _flg_swap,
       occupied_next(V_size, NO_AGENT),
       C_next(N, std::array<Vertex *, 5>()),
       tie_breakers(V_size, 0),
+      dh_values(V_size, 0),
       flg_swap(_flg_swap),
       scatter(_scatter)
 {
@@ -63,9 +66,68 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
   return success;
 }
 
+void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to)
+{
+  // Cache agent i's goal for fast lookups
+  const int goal_i = ins->goals[i]->id;
+
+  for (int k = 0; k < num_neighbors; ++k) {
+    Vertex* u_i = neighbors[k];
+    int max_penalty = 0;
+
+    // Evaluate the penalty against every other agent
+    for (int j = 0; j < N; ++j) {
+      if (j == i) continue;
+
+      const int goal_j = ins->goals[j]->id;
+      int current_penalty = 0;
+
+      // PART 1: Agent j has ALREADY MOVED (locked in for t+1)
+      if (Q_to[j] != nullptr) {
+        Vertex* v_j_next = Q_to[j];
+        current_penalty = pair_db->get(goal_i, goal_j, u_i->id, v_j_next->id);
+      } 
+      // PART 2: Agent j has NOT MOVED YET (unplanned)
+      else {
+        Vertex* v_j = Q_from[j];
+        int min_j_penalty = std::numeric_limits<int>::max();
+
+        // Check the penalty if agent j decides to wait at its current vertex
+        int wait_penalty = pair_db->get(goal_i, goal_j, u_i->id, v_j->id);
+        if (wait_penalty < min_j_penalty) {
+          min_j_penalty = wait_penalty;
+        }
+
+        // Check the penalty for all possible moves agent j could make
+        for (Vertex* u_j : v_j->neighbor) {
+          int move_penalty = pair_db->get(goal_i, goal_j, u_i->id, u_j->id);
+          if (move_penalty < min_j_penalty) {
+            min_j_penalty = move_penalty;
+          }
+        }
+        
+        current_penalty = min_j_penalty;
+      }
+
+      // Update the global maximum penalty for neighbor u_i
+      if (current_penalty > max_penalty) {
+        max_penalty = current_penalty;
+      }
+    }
+
+    // Write the final maximum penalty to the pre-allocated array
+    dh_values[u_i->id] = max_penalty;
+  }
+}
+
 bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
 {
   const auto K = Q_from[i]->neighbor.size();
+
+  auto swap_agent = NO_AGENT;
+  if (flg_swap) {
+    swap_agent = is_swap_required_and_possible(i, Q_from, Q_to);
+  }
 
   // exploit scatter data
   Vertex *prioritized_vertex = nullptr;
@@ -81,26 +143,26 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
     auto u = Q_from[i]->neighbor[k];
     C_next[i][k] = u;
     tie_breakers[u->id] = get_random_float(MT);  // set tie-breaker
+    dh_values[u->id] = 0;
   }
   C_next[i][K] = Q_from[i];
+  dh_values[Q_from[i]->id] = 0;
+
+  if (pair_db != nullptr && swap_agent == NO_AGENT) fill_dh_values(i, C_next[i], K + 1, Q_from, Q_to);
 
   // sort, note: K + 1 is sufficient
   std::sort(C_next[i].begin(), C_next[i].begin() + K + 1,
             [&](Vertex *const v, Vertex *const u) {
               if (v == prioritized_vertex) return true;
               if (u == prioritized_vertex) return false;
-              return D->get(i, v) + tie_breakers[v->id] <
-                     D->get(i, u) + tie_breakers[u->id];
+              return D->get(i, v) + tie_breakers[v->id] + dh_values[v->id] <
+                     D->get(i, u) + tie_breakers[u->id] + dh_values[u->id];
             });
 
   // emulate swap
-  auto swap_agent = NO_AGENT;
-  if (flg_swap) {
-    swap_agent = is_swap_required_and_possible(i, Q_from, Q_to);
-    if (swap_agent != NO_AGENT) {
-      // reverse vertex scoring
-      std::reverse(C_next[i].begin(), C_next[i].begin() + K + 1);
-    }
+  if (swap_agent != NO_AGENT) {
+    // reverse vertex scoring
+    std::reverse(C_next[i].begin(), C_next[i].begin() + K + 1);
   }
 
   auto swap_operation = [&]() {

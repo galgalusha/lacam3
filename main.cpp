@@ -14,6 +14,9 @@ int main(int argc, char *argv[])
   program.add_argument("-i", "--scen")
       .help("scenario file")
       .default_value(std::string(""));
+  program.add_argument("-pair-db", "--pair-db")
+      .help("pair db folder")
+      .default_value(std::string(""));
   program.add_argument("-N", "--num").help("number of agents").required();
   program.add_argument("-s", "--seed")
       .help("seed")
@@ -99,6 +102,7 @@ int main(int argc, char *argv[])
   const auto scen_name = program.get<std::string>("scen");
   const auto seed = std::stoi(program.get<std::string>("seed"));
   const auto map_name = program.get<std::string>("map");
+  const auto pair_db_name = program.get<std::string>("pair-db");
   const auto output_name = program.get<std::string>("output");
   const auto log_short = program.get<bool>("log_short");
   const auto N = std::stoi(program.get<std::string>("num"));
@@ -136,8 +140,13 @@ int main(int argc, char *argv[])
   Planner::CHECKPOINTS_DURATION =
       std::stof(program.get<std::string>("checkpoints-duration")) * 1000;
 
-/*
+  if (!pair_db_name.empty()) {
+    PIBT::pair_db = new PairWiseDB(ins.G, pair_db_name);
+    PIBT::pair_db->load_all2(&ins);
+  }
+
   // solve
+
   const auto deadline = Deadline(time_limit_sec * 1000);
   const auto solution = solve(ins, verbose - 1, &deadline, seed);
   const auto comp_time_ms = deadline.elapsed_ms();
@@ -154,25 +163,6 @@ int main(int argc, char *argv[])
   // post processing
   print_stats(verbose, &deadline, ins, solution, comp_time_ms);
   make_log(ins, solution, output_name, comp_time_ms, map_name, seed, log_short);
-*/
 
-  // merge_goal_folder("/home/galko/dev/mapf_db/maze-32-32-2.N-399", "/home/galko/dev/mapf_db/maze_goals");
-
-auto pair_db = PairWiseDB(ins.G, "maze-32-32-2.N-399");
-pair_db.test_interactive(&ins);
-   // pair_db.load_all2(&ins);
-//   std::cout << "loading bin files" << std::endl;
-//   pair_db.load_all(&ins);
-//   std::cout << "writing bin2 files" << std::endl;
-//   pair_db.write_bin2_files();
-  // pair_db.integration_test();
-
-
-//   Config starts = { ins.G->V[595], ins.G->V[507] };
-//   Config goals =  { ins.G->V[97] , ins.G->V[664] };
-//   ins.goals = goals;
-//   ins.starts = starts;
-//   ins.N = 2;
-//   draw_instance(&ins);
   return 0;
 }

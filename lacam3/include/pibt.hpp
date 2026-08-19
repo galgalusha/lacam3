@@ -12,8 +12,11 @@
 #include "instance.hpp"
 #include "scatter.hpp"
 #include "utils.hpp"
+#include "pair_wise_db.hpp"
 
 struct PIBT {
+  static PairWiseDB* pair_db;
+
   const Instance *ins;
   std::mt19937 MT;
 
@@ -28,6 +31,7 @@ struct PIBT {
   std::vector<int> occupied_next;               // for quick collision checking
   std::vector<std::array<Vertex *, 5>> C_next;  // next location candidates
   std::vector<float> tie_breakers;              // random values, used in PIBT
+  std::vector<uint8_t> dh_values;
 
   // swap, used in the LaCAM* paper
   bool flg_swap;
@@ -47,4 +51,6 @@ struct PIBT {
   bool is_swap_required(const int pusher, const int puller,
                         Vertex *v_pusher_origin, Vertex *v_puller_origin);
   bool is_swap_possible(Vertex *v_pusher_origin, Vertex *v_puller_origin);
+
+  void fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to);
 };
