@@ -9,6 +9,7 @@
 #include <iostream>
 #include <mutex>
 #include <set>
+#include <stdexcept>
 
 
 void PairWiseDB::load_bin_file(uint16_t lo, uint16_t hi) {
@@ -142,6 +143,16 @@ void PairWiseDB::load_bin2_file(uint16_t lo, uint16_t hi) {
 
 
 void PairWiseDB::load_all2(Instance* ins) {
+  namespace fs = std::filesystem;
+  fs::path db_dir = DB_PATH + name;
+  if (!fs::exists(db_dir) || !fs::is_directory(db_dir))
+    throw std::runtime_error("pair-wise DB folder not found: " + db_dir.string());
+  bool has_bin2 = false;
+  for (auto& entry : fs::directory_iterator(db_dir))
+    if (entry.path().extension() == ".bin2") { has_bin2 = true; break; }
+  if (!has_bin2)
+    throw std::runtime_error("no .bin2 files found in: " + db_dir.string());
+
   // ── Build required keys from this instance ─────────────────────────────────
   std::cout << "Collecting goal pairs" << std::endl;
   std::set<GoalsKey> required_keys;

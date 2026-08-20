@@ -1,4 +1,5 @@
 #include <argparse/argparse.hpp>
+#include <filesystem>
 #include <iostream>
 #include <lacam.hpp>
 #include <pair_wise_bin.hpp>
@@ -109,7 +110,7 @@ int main(int argc, char *argv[])
     return 1;
   }
   const auto pair_db_name = use_pair_db
-      ? map_name.substr(0, map_name.size() - 4)
+      ? std::filesystem::path(map_name).stem().string()
       : std::string("");
   const auto output_name = program.get<std::string>("output");
   const auto log_short = program.get<bool>("log_short");
@@ -150,7 +151,8 @@ int main(int argc, char *argv[])
 
   if (use_pair_db) {
     PIBT::pair_db = new PairWiseDB(ins.G, pair_db_name);
-    PIBT::pair_db->load_all2(&ins);
+    // PIBT::pair_db->load_all2(&ins);
+    PIBT::pair_db->test_interactive(&ins);
   }
 
   // solve
