@@ -15,8 +15,9 @@ int main(int argc, char *argv[])
       .help("scenario file")
       .default_value(std::string(""));
   program.add_argument("-pair-db", "--pair-db")
-      .help("pair db folder")
-      .default_value(std::string(""));
+      .help("use pair db (folder derived from map name)")
+      .default_value(false)
+      .implicit_value(true);
   program.add_argument("-N", "--num").help("number of agents").required();
   program.add_argument("-s", "--seed")
       .help("seed")
@@ -102,7 +103,14 @@ int main(int argc, char *argv[])
   const auto scen_name = program.get<std::string>("scen");
   const auto seed = std::stoi(program.get<std::string>("seed"));
   const auto map_name = program.get<std::string>("map");
-  const auto pair_db_name = program.get<std::string>("pair-db");
+  const auto use_pair_db = program.get<bool>("pair-db");
+  if (use_pair_db && (map_name.size() < 4 || map_name.substr(map_name.size() - 4) != ".map")) {
+    std::cerr << "error: map file must have a .map extension to use --pair-db" << std::endl;
+    return 1;
+  }
+  const auto pair_db_name = use_pair_db
+      ? map_name.substr(0, map_name.size() - 4)
+      : std::string("");
   const auto output_name = program.get<std::string>("output");
   const auto log_short = program.get<bool>("log_short");
   const auto N = std::stoi(program.get<std::string>("num"));
@@ -140,7 +148,7 @@ int main(int argc, char *argv[])
   Planner::CHECKPOINTS_DURATION =
       std::stof(program.get<std::string>("checkpoints-duration")) * 1000;
 
-  if (!pair_db_name.empty()) {
+  if (use_pair_db) {
     PIBT::pair_db = new PairWiseDB(ins.G, pair_db_name);
     PIBT::pair_db->load_all2(&ins);
   }
