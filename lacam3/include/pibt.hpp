@@ -32,6 +32,7 @@ struct PIBT {
   std::vector<std::array<Vertex *, 5>> C_next;  // next location candidates
   std::vector<float> tie_breakers;              // random values, used in PIBT
   std::vector<uint8_t> dh_values;
+  std::vector<int> pair_distances;
 
   // swap, used in the LaCAM* paper
   bool flg_swap;
@@ -53,4 +54,9 @@ struct PIBT {
   bool is_swap_possible(Vertex *v_pusher_origin, Vertex *v_puller_origin);
 
   void fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to);
+
+  inline int pair_key(int i, int j) { 
+    int lo = std::min(i, j), hi = std::max(i, j);
+    return hi * N + lo;
+  }
 };

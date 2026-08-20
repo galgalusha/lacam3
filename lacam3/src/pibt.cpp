@@ -16,7 +16,8 @@ PIBT::PIBT(const Instance *_ins, DistTable *_D, int seed, bool _flg_swap,
       tie_breakers(V_size, 0),
       dh_values(V_size, 0),
       flg_swap(_flg_swap),
-      scatter(_scatter)
+      scatter(_scatter),
+      pair_distances(N*N)
 {
 }
 
@@ -26,6 +27,7 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
                           const std::vector<int> &order)
 {
   bool success = true;
+  pair_distances.assign(N * N,  -1);
   // setup cache & constraints check
   for (auto i = 0; i < N; ++i) {
     // set occupied now
@@ -79,34 +81,26 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
     for (int j = 0; j < N; ++j) {
       if (j == i) continue;
 
+      auto pair_dist = pair_distances[pair_key(i, j)];
+      if (pair_dist <= 0) {
+         pair_dist = std::abs(Q_from[i]->x - Q_from[j]->x) + std::abs(Q_from[i]->y - Q_from[j]->y);
+         pair_distances[pair_key(i, j)] = pair_dist;
+      }
+      if (pair_dist > 6) continue;
+
       const int goal_j = ins->goals[j]->id;
       int current_penalty = 0;
 
       // PART 1: Agent j has ALREADY MOVED (locked in for t+1)
       if (Q_to[j] != nullptr) {
-        Vertex* v_j_next = Q_to[j];
+      Vertex* v_j_next = Q_to[j];
         current_penalty = pair_db->get(goal_i, goal_j, u_i->id, v_j_next->id);
       } 
-      // PART 2: Agent j has NOT MOVED YET (unplanned)  // DISABLED!
-      else if (false) {
+      // PART 2: Agent j has NOT MOVED YET (unplanned)
+      else {
         Vertex* v_j = Q_from[j];
-        int min_j_penalty = std::numeric_limits<int>::max();
-
-        // Check the penalty if agent j decides to wait at its current vertex
         int wait_penalty = pair_db->get(goal_i, goal_j, u_i->id, v_j->id);
-        if (wait_penalty < min_j_penalty) {
-          min_j_penalty = wait_penalty;
-        }
-
-        // Check the penalty for all possible moves agent j could make
-        for (Vertex* u_j : v_j->neighbor) {
-          int move_penalty = pair_db->get(goal_i, goal_j, u_i->id, u_j->id);
-          if (move_penalty < min_j_penalty) {
-            min_j_penalty = move_penalty;
-          }
-        }
-        
-        current_penalty = min_j_penalty;
+        current_penalty = wait_penalty / 2;
       }
 
       // Update the global maximum penalty for neighbor u_i
