@@ -52,6 +52,10 @@ int main(int argc, char *argv[])
       .help("Generate PairDB Database")
       .default_value(false)
       .implicit_value(true);
+  program.add_argument("--pair-db-test")
+      .help("Test PairDB Database")
+      .default_value(false)
+      .implicit_value(true);
   program.add_argument("--random-insert-prob1")
       .help("probability of inserting the start node")
       .default_value(std::string("0.001"));
@@ -112,13 +116,14 @@ int main(int argc, char *argv[])
   const auto seed = std::stoi(program.get<std::string>("seed"));
   const auto radius = std::stoi(program.get<std::string>("radius"));
   const auto map_name = program.get<std::string>("map");
+  const auto test_pair_db = program.get<bool>("pair-db-test");
   const auto gen_pair_db = program.get<bool>("pair-db-gen");
   const auto use_pair_db = program.get<bool>("pair-db");
   if (use_pair_db && (map_name.size() < 4 || map_name.substr(map_name.size() - 4) != ".map")) {
     std::cerr << "error: map file must have a .map extension to use --pair-db" << std::endl;
     return 1;
   }
-  const auto pair_db_name = (use_pair_db || gen_pair_db)
+  const auto pair_db_name = (use_pair_db || gen_pair_db || test_pair_db)
       ? std::filesystem::path(map_name).stem().string()
       : std::string("");
   const auto output_name = program.get<std::string>("output");
@@ -175,6 +180,12 @@ int main(int argc, char *argv[])
     std::cout << "\n[5] Writing bin2 files" << std::endl;
     pair_db_mem.write_bin2_files();
     std::cout << "\nDone. You can delete the bin files and leave only the bin2 files." << std::endl;
+    exit(0);
+  }
+
+  if (test_pair_db) {
+    PairWiseDB pair_db(ins.G, pair_db_name);
+    pair_db.test_interactive(&ins);
     exit(0);
   }
 

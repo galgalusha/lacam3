@@ -81,9 +81,10 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
     for (int j = 0; j < N; ++j) {
       if (j == i) continue;
 
+      // get or create from pair_distances cache
       auto pair_dist = pair_distances[pair_key(i, j)];
       if (pair_dist <= 0) {
-         pair_dist = std::abs(Q_from[i]->x - Q_from[j]->x) + std::abs(Q_from[i]->y - Q_from[j]->y);
+         pair_dist = pair_db->D->get(u_i->id, Q_from[j]->id);
          pair_distances[pair_key(i, j)] = pair_dist;
       }
       if (pair_dist > PairWiseDB::RADIUS) continue;
@@ -100,7 +101,7 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
       else {
         Vertex* v_j = Q_from[j];
         int wait_penalty = pair_db->get(goal_i, goal_j, u_i->id, v_j->id);
-        current_penalty = wait_penalty / 2;
+        current_penalty = wait_penalty / 6;
       }
 
       // Update the global maximum penalty for neighbor u_i
@@ -159,7 +160,7 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
     std::reverse(C_next[i].begin(), C_next[i].begin() + K + 1);
   } else if (pair_db != nullptr) {
     fill_dh_values(i, C_next[i], K + 1, Q_from, Q_to);
-  std::sort(C_next[i].begin(), C_next[i].begin() + K + 1,
+    std::sort(C_next[i].begin(), C_next[i].begin() + K + 1,
             [&](Vertex *const v, Vertex *const u) {
               if (v == prioritized_vertex) return true;
               if (u == prioritized_vertex) return false;
