@@ -86,7 +86,7 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
          pair_dist = std::abs(Q_from[i]->x - Q_from[j]->x) + std::abs(Q_from[i]->y - Q_from[j]->y);
          pair_distances[pair_key(i, j)] = pair_dist;
       }
-      if (pair_dist > 6) continue;
+      if (pair_dist > PairWiseDB::RADIUS) continue;
 
       const int goal_j = ins->goals[j]->id;
       int current_penalty = 0;

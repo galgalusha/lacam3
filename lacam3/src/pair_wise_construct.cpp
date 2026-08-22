@@ -73,6 +73,7 @@ void PairWiseDB::construct() {
           for (int j_s = 0; j_s < (int)G_ref.V.size(); ++j_s) {
             if (j_s == j_g) continue;
             if (i_s == j_s) continue;
+            if (D->get(i_s, j_s) > PairWiseDB::RADIUS) continue;
             ++result.evaluated;
 
             int ek = i_s * D->K + j_s;
@@ -154,6 +155,7 @@ void PairWiseDB::construct_for_instance(const Config& goals) {
           for (int j_s = 0; j_s < (int)G_ref.V.size(); ++j_s) {
             if (j_s == j_g) continue;
             if (i_s == j_s) continue;
+            if (D->get(i_s, j_s) > PairWiseDB::RADIUS) continue;
             ++result.evaluated;
 
             int ek = i_s * D->K + j_s;
@@ -222,6 +224,7 @@ void PairWiseDB::construct_for_instance_only_goals(const Config& goals) {
 
       for (int j_s = 0; j_s < (int)G->V.size(); ++j_s) {
         if (j_s == j_g || j_s == i_g) continue;
+        if (D->get(i_g, j_s) > PairWiseDB::RADIUS) continue;
         futures.push_back(pool.submit([=, D_ptr = D, &G_ref = *G]() {
           ThreadResult result{{}, 0};
           int i_s = i_g;
@@ -240,6 +243,7 @@ void PairWiseDB::construct_for_instance_only_goals(const Config& goals) {
 
       for (int i_s = 0; i_s < (int)G->V.size(); ++i_s) {
         if (i_s == i_g || i_s == j_g) continue;
+        if (D->get(i_s, j_g) > PairWiseDB::RADIUS) continue;
         futures.push_back(pool.submit([=, D_ptr = D, &G_ref = *G]() {
           ThreadResult result{{}, 0};
           int j_s = j_g;

@@ -23,6 +23,9 @@ int main(int argc, char *argv[])
   program.add_argument("-s", "--seed")
       .help("seed")
       .default_value(std::string("0"));
+  program.add_argument("-radius", "--radius")
+      .help("PairDB radius")
+      .default_value(std::string("6"));
   program.add_argument("-v", "--verbose")
       .help("verbose")
       .default_value(std::string("0"));
@@ -43,6 +46,10 @@ int main(int argc, char *argv[])
       .implicit_value(true);
   program.add_argument("--no-star")
       .help("turn off the anytime part, i.e., usual LaCAM")
+      .default_value(false)
+      .implicit_value(true);
+  program.add_argument("--pair-db-gen")
+      .help("Generate PairDB Database")
       .default_value(false)
       .implicit_value(true);
   program.add_argument("--random-insert-prob1")
@@ -103,13 +110,15 @@ int main(int argc, char *argv[])
       std::stoi(program.get<std::string>("time_limit_sec"));
   const auto scen_name = program.get<std::string>("scen");
   const auto seed = std::stoi(program.get<std::string>("seed"));
+  const auto radius = std::stoi(program.get<std::string>("radius"));
   const auto map_name = program.get<std::string>("map");
+  const auto gen_pair_db = program.get<bool>("pair-db-gen");
   const auto use_pair_db = program.get<bool>("pair-db");
   if (use_pair_db && (map_name.size() < 4 || map_name.substr(map_name.size() - 4) != ".map")) {
     std::cerr << "error: map file must have a .map extension to use --pair-db" << std::endl;
     return 1;
   }
-  const auto pair_db_name = use_pair_db
+  const auto pair_db_name = (use_pair_db || gen_pair_db)
       ? std::filesystem::path(map_name).stem().string()
       : std::string("");
   const auto output_name = program.get<std::string>("output");
@@ -148,6 +157,27 @@ int main(int argc, char *argv[])
           : std::stof(program.get<std::string>("recursive-time-limit")) * 1000;
   Planner::CHECKPOINTS_DURATION =
       std::stof(program.get<std::string>("checkpoints-duration")) * 1000;
+
+  PairWiseDB::RADIUS = radius;
+
+  if (gen_pair_db) {
+    std::cout << "\n[1] Constructing main bin files part" << std::endl;
+    PairWiseDB pwh_no_goals(ins.G, pair_db_name);
+    pwh_no_goals.construct_for_instance(ins.goals);
+    std::cout << "\n[2] Adding goals bin files" << std::endl;
+    PairWiseDB pwh_goals(ins.G, pair_db_name + "_goals");
+    pwh_goals.construct_for_instance_only_goals(ins.goals);
+    std::cout << "\n[3] Merging goals to main" << std::endl;
+    merge_goal_folder(DB_PATH + pair_db_name, DB_PATH + pair_db_name + "_goals");
+    PairWiseDB pair_db_mem(ins.G, pair_db_name);
+    std::cout << "\n[4] Loading DB to memory" << std::endl;
+    pair_db_mem.load_all(&ins);
+    std::cout << "\n[5] Writing bin2 files" << std::endl;
+    pair_db_mem.write_bin2_files();
+    std::cout << "\nDone. You can delete the bin files and leave only the bin2 files." << std::endl;
+    exit(0);
+  }
+
 
   if (use_pair_db) {
     PIBT::pair_db = new PairWiseDB(ins.G, pair_db_name);

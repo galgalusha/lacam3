@@ -14,7 +14,7 @@
 #include <vector>
 
 
-constexpr int NUM_OF_THREADS = 7;
+constexpr int NUM_OF_THREADS = 8;
 constexpr char* DB_PATH = "/home/galko/dev/mapf_db/";
 constexpr size_t MAX_VERTICES = 1024;
 
@@ -103,6 +103,7 @@ using PairData = absl::flat_hash_map<GoalsKey, StartArrays>;
  * to allow O(log(n)) lookup when looking for a j_start entry.
  */
 struct PairWiseDB {
+  static int RADIUS;
   Graph *G;
   std::string name;
   DistTable* D;

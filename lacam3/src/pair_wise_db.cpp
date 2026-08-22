@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+int PairWiseDB::RADIUS = 6;
 
 static DistTable* create_dist_table(Graph* G) {
   Config goals = G->V;
