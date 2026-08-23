@@ -25,7 +25,7 @@ int main(int argc, char *argv[])
       .default_value(std::string("0"));
   program.add_argument("-radius", "--radius")
       .help("PairDB radius")
-      .default_value(std::string("6"));
+      .default_value(std::string("3"));
   program.add_argument("-v", "--verbose")
       .help("verbose")
       .default_value(std::string("0"));

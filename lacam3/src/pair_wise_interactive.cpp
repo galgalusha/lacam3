@@ -55,7 +55,8 @@ static void cls() { std::cout << "\033[2J\033[H" << std::flush; }
 void PairWiseDB::test_interactive(Instance* ins) {
   // Load the entire pair-wise DB for this instance upfront
   std::cout << "Loading pair-wise DB...\n" << std::flush;
-  load_all2(ins);
+  // load_all2(ins);
+  load_kernels(ins);
 
   const uint N = ins->N;
 
@@ -87,7 +88,8 @@ void PairWiseDB::test_interactive(Instance* ins) {
       uint16_t lo = std::min(ig, jg), hi = std::max(ig, jg);
       if (!pair_data.count(to_goals_key(lo, hi))) continue;
       auto js_ = orig_starts[j] ? (uint16_t)orig_starts[j]->id : (uint16_t)0;
-      if (get(ig, jg, is_, js_) > 0)
+      // if (get_from_map(ig, jg, is_, js_) > 0)
+      if (get(ag, j, orig_starts[ag], orig_starts[j]) > 0)
         result.push_back((int)j);
     }
     return result;
@@ -154,7 +156,8 @@ void PairWiseDB::test_interactive(Instance* ins) {
         auto jg  = (uint16_t)orig_goals[hover]->id;
         auto is_ = orig_starts[sel_agent] ? (uint16_t)orig_starts[sel_agent]->id : (uint16_t)0;
         auto js_ = orig_starts[hover]     ? (uint16_t)orig_starts[hover]->id     : (uint16_t)0;
-        int dh   = (int)get(ig, jg, is_, js_);
+        // int dh   = (int)get_from_map(ig, jg, is_, js_);
+        int dh = get(sel_agent, hover, orig_starts[sel_agent], orig_starts[hover]);
         std::cout << "Agent " << hover
                   << "  goal=" << jg << "  dh=" << dh << '\n';
       } else {

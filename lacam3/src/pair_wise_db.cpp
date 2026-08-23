@@ -16,7 +16,7 @@ PairWiseDB::PairWiseDB(Graph* _G, std::string _name)
     : G(_G), name(_name), D(create_dist_table(_G)) {}
 
 
-uint8_t PairWiseDB::get(uint16_t i_goal, uint16_t j_goal, uint16_t i_start, uint16_t j_start) const {
+uint8_t PairWiseDB::get_from_map(uint16_t i_goal, uint16_t j_goal, uint16_t i_start, uint16_t j_start) const {
   bool flipped = i_goal > j_goal;
   uint16_t lo  = flipped ? j_goal  : i_goal;
   uint16_t hi  = flipped ? i_goal  : j_goal;

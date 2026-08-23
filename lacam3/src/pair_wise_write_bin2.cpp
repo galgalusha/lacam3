@@ -60,7 +60,7 @@ void PairWiseDB::write_bin2_files() {
   for (auto it : iters) {
     futures.push_back(pool.submit([&, it]() -> ThreadResult {
       const GoalsKey key = it->first;
-      const StartArrays& start_arrays = it->second;
+      const Bin2Content& start_arrays = it->second;
       uint16_t lo = (uint16_t)(key >> 16);
       uint16_t hi = (uint16_t)(key & 0xFFFF);
 

@@ -48,7 +48,7 @@ void PairWiseDB::integration_test() {
     BinEntry entry;
     while (f.read(reinterpret_cast<char*>(&entry), sizeof(BinEntry))) {
       uint8_t expected = entry.dh > 255 ? 255 : (uint8_t)entry.dh;
-      uint8_t actual = get(hi, lo, entry.j_start, entry.i_start);
+      uint8_t actual = get_from_map(hi, lo, entry.j_start, entry.i_start);
 
       int bucket = expected <= 10 ? (int)expected : 11;
       dh_counts[bucket]++;
@@ -126,8 +126,8 @@ void PairWiseDB::test() {
   PairWiseDB pwh(G, test2);
   pwh.load_all2(ins);
 
-  std::cout << "A with B: " << (int)pwh.get(A_goal->id, B_goal->id, A_start->id, B_start->id) << std::endl;
-  std::cout << "A with C: " << (int)pwh.get(A_goal->id, C_goal->id, A_start->id, C_start->id) << std::endl;
-  std::cout << "B with C: " << (int)pwh.get(B_goal->id, C_goal->id, B_start->id, C_start->id) << std::endl;
+  std::cout << "A with B: " << (int)pwh.get_from_map(A_goal->id, B_goal->id, A_start->id, B_start->id) << std::endl;
+  std::cout << "A with C: " << (int)pwh.get_from_map(A_goal->id, C_goal->id, A_start->id, C_start->id) << std::endl;
+  std::cout << "B with C: " << (int)pwh.get_from_map(B_goal->id, C_goal->id, B_start->id, C_start->id) << std::endl;
   std::cout << "Done version 2.0" << std::endl;
 }

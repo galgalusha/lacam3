@@ -95,12 +95,12 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
       // PART 1: Agent j has ALREADY MOVED (locked in for t+1)
       if (Q_to[j] != nullptr) {
       Vertex* v_j_next = Q_to[j];
-        current_penalty = pair_db->get(goal_i, goal_j, u_i->id, v_j_next->id);
+        current_penalty = pair_db->get_from_map(goal_i, goal_j, u_i->id, v_j_next->id);
       } 
       // PART 2: Agent j has NOT MOVED YET (unplanned)
       else {
         Vertex* v_j = Q_from[j];
-        int wait_penalty = pair_db->get(goal_i, goal_j, u_i->id, v_j->id);
+        int wait_penalty = pair_db->get_from_map(goal_i, goal_j, u_i->id, v_j->id);
         current_penalty = wait_penalty / 6;
       }
 
