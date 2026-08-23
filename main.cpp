@@ -186,14 +186,15 @@ int main(int argc, char *argv[])
   if (test_pair_db) {
     PairWiseDB pair_db(ins.G, pair_db_name);
     pair_db.test_interactive(&ins);
+    // PairWiseDB::test();
     exit(0);
   }
 
 
   if (use_pair_db) {
     PIBT::pair_db = new PairWiseDB(ins.G, pair_db_name);
-    PIBT::pair_db->load_all2(&ins);
-    // PIBT::pair_db->test_interactive(&ins);
+    PIBT::pair_db->load_kernels(&ins);
+    // PIBT::pair_db->load_all2(&ins);
   }
 
   // solve

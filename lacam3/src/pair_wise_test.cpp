@@ -81,6 +81,7 @@ void PairWiseDB::integration_test() {
 }
 
 void PairWiseDB::test() {
+  PairWiseDB::RADIUS = 100;
   std::vector<std::string> grid = {
     "....",
     "....",
@@ -95,14 +96,18 @@ void PairWiseDB::test() {
     return G->U[index];
   };
 
-  auto A_start = coord(0, 0);
+  auto A_start = coord(1, 3);
   auto A_goal  = coord(4, 1);
 
   auto B_start = coord(1, 1);
   auto B_goal  = coord(3, 0);
 
-  auto C_start = coord(4, 2);
-  auto C_goal  = coord(4, 2);
+  auto C_start = coord(2, 3);
+  auto C_goal  = coord(0, 0);
+
+  auto A_id = 0;
+  auto B_id = 1;
+  auto C_id = 2;
 
   Config starts = { A_start, B_start, C_start };
   Config goals  = { A_goal,  B_goal,  C_goal  };
@@ -123,11 +128,23 @@ void PairWiseDB::test() {
     pwh.write_bin2_files();
   }
 
-  PairWiseDB pwh(G, test2);
-  pwh.load_all2(ins);
+  {
+    PairWiseDB pwh(G, test2);
+    pwh.load_all2(ins);
 
-  std::cout << "A with B: " << (int)pwh.get_from_map(A_goal->id, B_goal->id, A_start->id, B_start->id) << std::endl;
-  std::cout << "A with C: " << (int)pwh.get_from_map(A_goal->id, C_goal->id, A_start->id, C_start->id) << std::endl;
-  std::cout << "B with C: " << (int)pwh.get_from_map(B_goal->id, C_goal->id, B_start->id, C_start->id) << std::endl;
-  std::cout << "Done version 2.0" << std::endl;
+    std::cout << "A with B: " << (int)pwh.get_from_map(A_goal->id, B_goal->id, A_start->id, B_start->id) << std::endl;
+    std::cout << "A with C: " << (int)pwh.get_from_map(A_goal->id, C_goal->id, A_start->id, C_start->id) << std::endl;
+    std::cout << "B with C: " << (int)pwh.get_from_map(B_goal->id, C_goal->id, B_start->id, C_start->id) << std::endl;
+    std::cout << "Done bin2 test v2" << std::endl;
+  }
+
+  {
+    PairWiseDB pwh(G, test2);
+    pwh.load_kernels(ins);
+
+    std::cout << "A with B: " << (int)pwh.get(A_id, B_id, A_start, B_start) << std::endl;
+    std::cout << "A with C: " << (int)pwh.get(A_id, C_id, A_start, C_start) << std::endl;
+    std::cout << "B with C: " << (int)pwh.get(B_id, C_id, B_start, C_start) << std::endl;
+    std::cout << "Done kernel test" << std::endl;
+  }
 }

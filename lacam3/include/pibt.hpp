@@ -16,6 +16,7 @@
 
 struct PIBT {
   static PairWiseDB* pair_db;
+  static float GAMMA;
 
   const Instance *ins;
   std::mt19937 MT;

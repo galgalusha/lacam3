@@ -24,16 +24,33 @@ uint8_t PairWiseDB::get_from_map(uint16_t i_goal, uint16_t j_goal, uint16_t i_st
   uint16_t js  = flipped ? i_start : j_start;
 
   auto it = pair_data.find(to_goals_key(lo, hi));
-  if (it == pair_data.end()) return 0;
-  if (is >= MAX_VERTICES || js >= MAX_VERTICES) return 0;
+  if (it == pair_data.end()) {
+    // std::cout << "get_from_map: goals key not found. i_goal: " << i_goal << ", j_goal: " << j_goal  << std::endl;
+    return 0;
+  }
+  if (is >= MAX_VERTICES || js >= MAX_VERTICES) {
+    // std::cout << "get_from_map: is or js too big. i_goal: " << i_goal << ", j_goal: " << j_goal  << std::endl;
+    return 0;
+  }
   const auto& ranges = it->second[is];
-  if (ranges.empty()) return 0;
+  if (ranges.empty()) {
+    // std::cout << "get_from_map: no entry for is. i_goal: " << i_goal << ", j_goal: " << j_goal  << std::endl;
+    return 0;
+  }
 
   // Binary search for the last range whose j_start <= js
   auto cmp = [](uint16_t val, const RangeEntry& r) { return val < r.j_start; };
   auto rit = std::upper_bound(ranges.begin(), ranges.end(), js, cmp);
-  if (rit == ranges.begin()) return 0;
+  if (rit == ranges.begin()) {
+    // std::cout << "get_from_map: rit == ranges.begin(). i_goal: " << i_goal << ", j_goal: " << j_goal  << std::endl;
+    return 0;
+  }
   --rit;
-  return js < (uint16_t)(rit->j_start + rit->range) ? rit->dh : 0;
+  if (js < (uint16_t)(rit->j_start + rit->range)) {
+    // std::cout << "get_from_map: returning dh=" << (int)rit->dh  << std::endl;
+    return rit->dh;
+  }
+  // std::cout << "get_from_map: js not in range. i_goal: " << i_goal << ", j_goal: " << j_goal  << std::endl;
+  return 0;
 }
 

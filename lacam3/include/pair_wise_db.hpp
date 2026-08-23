@@ -162,17 +162,26 @@ struct PairWiseDB {
   void load_kernels(Instance* ins);
 
   inline uint8_t get(int i, int j, Vertex* vi, Vertex* vj) const {
-    int i_g = ins->goals[i]->id;
-    int j_g = ins->goals[j]->id;
-    int lo        = i_g < j_g ? i  : j;
-    int hi        = i_g < j_g ? j  : i;
+    int     i_g   = ins->goals[i]->id;
+    int     j_g   = ins->goals[j]->id;
+    int     lo    = i_g < j_g ? i  : j;
+    int     hi    = i_g < j_g ? j  : i;
     Vertex* lo_v  = i_g < j_g ? vi : vj;
     Vertex* hi_v  = i_g < j_g ? vj : vi;
     uint8_t idx_in_kernel = get_offset_index(lo_v, hi_v);
     if (idx_in_kernel == 255) return 0;
     uint32_t kernel_offset = kernel_offsets[((size_t)lo * N + hi) * MAX_VERTICES + lo_v->id];
     if (kernel_offset == UINT32_MAX) return 0;
-    return kernels[kernel_offset][idx_in_kernel];
+    auto res = kernels[kernel_offset][idx_in_kernel];
+    // if (res > 0) {
+    //   std::cout << "dh=" << (int)res 
+    //             << ", agent i (x:" << vi->x << ", y:" << vi->y <<  ")->" 
+    //             << "(x:" << ins->goals[i]->x << ", y:" << ins->goals[i]->y <<  ")\t" 
+    //             << ", agent j (x:" << vj->x << ", y:" << vj->y <<  ")" 
+    //             << "(x:" << ins->goals[j]->x << ", y:" << ins->goals[j]->y <<  ")" 
+    //             << std::endl;
+    // }
+    return res;
   }
   
   void integration_test();
