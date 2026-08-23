@@ -34,6 +34,8 @@ struct PIBT {
   std::vector<float> tie_breakers;              // random values, used in PIBT
   std::vector<float> dh_values;
   std::vector<int> pair_distances;
+  // per-vertex candidates within RADIUS: non-null, in-bounds, Manhattan <= RADIUS
+  std::vector<std::vector<Vertex*>> spatial_neighbors;
 
   // swap, used in the LaCAM* paper
   bool flg_swap;

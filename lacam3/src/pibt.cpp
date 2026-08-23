@@ -18,8 +18,26 @@ PIBT::PIBT(const Instance *_ins, DistTable *_D, int seed, bool _flg_swap,
       dh_values(V_size, 0),
       flg_swap(_flg_swap),
       scatter(_scatter),
-      pair_distances(N*N)
+      pair_distances(N*N),
+      spatial_neighbors(ins->G->V.size())
 {
+  const int width = ins->G->width;
+  const int height = ins->G->height;
+  const int r = PairWiseDB::RADIUS;
+  for (Vertex* u_i : ins->G->V) {
+    auto& vec = spatial_neighbors[u_i->id];
+    for (int dy = -r; dy <= r; ++dy) {
+      for (int dx = -r; dx <= r; ++dx) {
+        if (std::abs(dx) + std::abs(dy) > r) continue;
+        const int nx = u_i->x + dx;
+        const int ny = u_i->y + dy;
+        if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+        Vertex* u_j = ins->G->U[ny * width + nx];
+        if (u_j == nullptr || u_j == u_i) continue;
+        vec.push_back(u_j);
+      }
+    }
+  }
 }
 
 PIBT::~PIBT() {}
@@ -75,42 +93,25 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
     Vertex* u_i = neighbors[k];
     float max_penalty = 0;
 
-    int r = PairWiseDB::RADIUS + 0;
+    for (Vertex* u_j : spatial_neighbors[u_i->id]) {
+      if (pair_db->D->get(u_i->id, u_j->id) > PairWiseDB::RADIUS) continue;
 
-    // Spatial scan within RADIUS=3 Manhattan distance around u_i
-    const int cx = u_i->x;
-    const int cy = u_i->y;
-    const int width = ins->G->width;
-    const int height = ins->G->height;
-    for (int dy = -r; dy <= r; ++dy) {
-      for (int dx = -r; dx <= r; ++dx) {
-        // if (std::abs(dx) + std::abs(dy) > PairWiseDB::RADIUS) continue;
-        const int nx = cx + dx;
-        const int ny = cy + dy;
-        if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
-        Vertex* u_j = ins->G->U[ny * width + nx];
-        if (u_j == nullptr) continue;
-        if (pair_db->D->get(u_i->id, u_j->id) > r) continue;
+      // Check for agents moving TO this cell (PART 1)
+      int j_next = occupied_next[u_j->id];
+      if (j_next != NO_AGENT && j_next != i) {
+        float current_penalty = pair_db->get(i, j_next, u_i, u_j);
+        if (current_penalty > max_penalty) max_penalty = current_penalty;
+      }
 
-        // Check for agents moving TO this cell (PART 1)
-        int j_next = occupied_next[u_j->id];
-        if (j_next != NO_AGENT && j_next != i) {
-          float current_penalty = pair_db->get(i, j_next, u_i, u_j);
-          // int current_penalty = pair_db->get_from_map(ins->goals[i]->id, ins->goals[j_next]->id, u_i->id, u_j->id);
+      // Check for agents CURRENTLY AT this cell (PART 2)
+      int j_now = occupied_now[u_j->id];
+      if (j_now != NO_AGENT && j_now != i) {
+        // Only apply PART 2 if the agent hasn't planned a move yet.
+        // If Q_to is not null, they are moving somewhere else and will be evaluated there.
+        if (Q_to[j_now] == nullptr) {
+          float wait_penalty = pair_db->get(i, j_now, u_i, u_j);
+          float current_penalty = wait_penalty * GAMMA;
           if (current_penalty > max_penalty) max_penalty = current_penalty;
-        }
-
-        // Check for agents CURRENTLY AT this cell (PART 2)
-        int j_now = occupied_now[u_j->id];
-        if (j_now != NO_AGENT && j_now != i) {
-          // Only apply PART 2 if the agent hasn't planned a move yet.
-          // If Q_to is not null, they are moving somewhere else and will be evaluated there.
-          if (Q_to[j_now] == nullptr) {
-            float wait_penalty = pair_db->get(i, j_now, u_i, u_j);
-            // int wait_penalty = pair_db->get_from_map(ins->goals[i]->id, ins->goals[j_now]->id, u_i->id, u_j->id);
-            float current_penalty = wait_penalty * GAMMA;
-            if (current_penalty > max_penalty) max_penalty = current_penalty;
-          }
         }
       }
     }
