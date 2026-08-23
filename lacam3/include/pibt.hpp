@@ -32,7 +32,7 @@ struct PIBT {
   std::vector<int> occupied_next;               // for quick collision checking
   std::vector<std::array<Vertex *, 5>> C_next;  // next location candidates
   std::vector<float> tie_breakers;              // random values, used in PIBT
-  std::vector<uint8_t> dh_values;
+  std::vector<float> dh_values;
   std::vector<int> pair_distances;
 
   // swap, used in the LaCAM* paper

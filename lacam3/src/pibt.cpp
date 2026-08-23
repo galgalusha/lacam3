@@ -73,7 +73,7 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
 {
   for (int k = 0; k < num_neighbors; ++k) {
     Vertex* u_i = neighbors[k];
-    int max_penalty = 0;
+    float max_penalty = 0;
 
     int r = PairWiseDB::RADIUS + 0;
 
@@ -95,7 +95,7 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
         // Check for agents moving TO this cell (PART 1)
         int j_next = occupied_next[u_j->id];
         if (j_next != NO_AGENT && j_next != i) {
-          int current_penalty = pair_db->get(i, j_next, u_i, u_j);
+          float current_penalty = pair_db->get(i, j_next, u_i, u_j);
           // int current_penalty = pair_db->get_from_map(ins->goals[i]->id, ins->goals[j_next]->id, u_i->id, u_j->id);
           if (current_penalty > max_penalty) max_penalty = current_penalty;
         }
@@ -106,9 +106,9 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
           // Only apply PART 2 if the agent hasn't planned a move yet.
           // If Q_to is not null, they are moving somewhere else and will be evaluated there.
           if (Q_to[j_now] == nullptr) {
-            int wait_penalty = pair_db->get(i, j_now, u_i, u_j);
+            float wait_penalty = pair_db->get(i, j_now, u_i, u_j);
             // int wait_penalty = pair_db->get_from_map(ins->goals[i]->id, ins->goals[j_now]->id, u_i->id, u_j->id);
-            int current_penalty = wait_penalty * GAMMA;
+            float current_penalty = wait_penalty * GAMMA;
             if (current_penalty > max_penalty) max_penalty = current_penalty;
           }
         }
@@ -116,7 +116,7 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
     }
 
     // Write the final maximum penalty to the pre-allocated array
-    dh_values[u_i->id] = max_penalty;
+    dh_values[u_i->id] = 0.01 * max_penalty;
   }
 }
 
@@ -138,7 +138,7 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
   for (size_t k = 0; k < K; ++k) {
     auto u = Q_from[i]->neighbor[k];
     C_next[i][k] = u;
-    tie_breakers[u->id] = get_random_float(MT);  // set tie-breaker
+    tie_breakers[u->id] = 0.001 * get_random_float(MT);  // set tie-breaker
     dh_values[u->id] = 0;
   }
   C_next[i][K] = Q_from[i];
@@ -169,8 +169,8 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
             [&](Vertex *const v, Vertex *const u) {
               if (v == prioritized_vertex) return true;
               if (u == prioritized_vertex) return false;
-              return D->get(i, v) + 0.001 * tie_breakers[v->id] + 0.01 * (float)dh_values[v->id] <
-                     D->get(i, u) + 0.001 * tie_breakers[u->id] + 0.01 * (float)dh_values[u->id];
+              return D->get(i, v) + tie_breakers[v->id] + dh_values[v->id] <
+                     D->get(i, u) + tie_breakers[u->id] + dh_values[u->id];
             });    
   }
 
