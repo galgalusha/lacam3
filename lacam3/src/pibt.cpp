@@ -1,6 +1,7 @@
 #include "../include/pibt.hpp"
 
 PairWiseDB* PIBT::pair_db = nullptr;
+float PIBT::GAMMA = 0.5;
 
 PIBT::PIBT(const Instance *_ins, DistTable *_D, int seed, bool _flg_swap,
            Scatter *_scatter)
@@ -70,43 +71,47 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
 
 void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to)
 {
-  // Cache agent i's goal for fast lookups
-  const int goal_i = ins->goals[i]->id;
-
   for (int k = 0; k < num_neighbors; ++k) {
     Vertex* u_i = neighbors[k];
     int max_penalty = 0;
 
-    // Evaluate the penalty against every other agent
-    for (int j = 0; j < N; ++j) {
-      if (j == i) continue;
+    int r = PairWiseDB::RADIUS + 0;
 
-      // get or create from pair_distances cache
-      auto pair_dist = pair_distances[pair_key(i, j)];
-      if (pair_dist <= 0) {
-         pair_dist = pair_db->D->get(u_i->id, Q_from[j]->id);
-         pair_distances[pair_key(i, j)] = pair_dist;
-      }
-      if (pair_dist > PairWiseDB::RADIUS) continue;
+    // Spatial scan within RADIUS=3 Manhattan distance around u_i
+    const int cx = u_i->x;
+    const int cy = u_i->y;
+    const int width = ins->G->width;
+    const int height = ins->G->height;
+    for (int dy = -r; dy <= r; ++dy) {
+      for (int dx = -r; dx <= r; ++dx) {
+        // if (std::abs(dx) + std::abs(dy) > PairWiseDB::RADIUS) continue;
+        const int nx = cx + dx;
+        const int ny = cy + dy;
+        if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+        Vertex* u_j = ins->G->U[ny * width + nx];
+        if (u_j == nullptr) continue;
+        if (pair_db->D->get(u_i->id, u_j->id) > r) continue;
 
-      const int goal_j = ins->goals[j]->id;
-      int current_penalty = 0;
+        // Check for agents moving TO this cell (PART 1)
+        int j_next = occupied_next[u_j->id];
+        if (j_next != NO_AGENT && j_next != i) {
+          int current_penalty = pair_db->get(i, j_next, u_i, u_j);
+          // int current_penalty = pair_db->get_from_map(ins->goals[i]->id, ins->goals[j_next]->id, u_i->id, u_j->id);
+          if (current_penalty > max_penalty) max_penalty = current_penalty;
+        }
 
-      // PART 1: Agent j has ALREADY MOVED (locked in for t+1)
-      if (Q_to[j] != nullptr) {
-      Vertex* v_j_next = Q_to[j];
-        current_penalty = pair_db->get_from_map(goal_i, goal_j, u_i->id, v_j_next->id);
-      } 
-      // PART 2: Agent j has NOT MOVED YET (unplanned)
-      else {
-        Vertex* v_j = Q_from[j];
-        int wait_penalty = pair_db->get_from_map(goal_i, goal_j, u_i->id, v_j->id);
-        current_penalty = wait_penalty / 6;
-      }
-
-      // Update the global maximum penalty for neighbor u_i
-      if (current_penalty > max_penalty) {
-        max_penalty = current_penalty;
+        // Check for agents CURRENTLY AT this cell (PART 2)
+        int j_now = occupied_now[u_j->id];
+        if (j_now != NO_AGENT && j_now != i) {
+          // Only apply PART 2 if the agent hasn't planned a move yet.
+          // If Q_to is not null, they are moving somewhere else and will be evaluated there.
+          if (Q_to[j_now] == nullptr) {
+            int wait_penalty = pair_db->get(i, j_now, u_i, u_j);
+            // int wait_penalty = pair_db->get_from_map(ins->goals[i]->id, ins->goals[j_now]->id, u_i->id, u_j->id);
+            int current_penalty = wait_penalty * GAMMA;
+            if (current_penalty > max_penalty) max_penalty = current_penalty;
+          }
+        }
       }
     }
 
@@ -164,8 +169,8 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
             [&](Vertex *const v, Vertex *const u) {
               if (v == prioritized_vertex) return true;
               if (u == prioritized_vertex) return false;
-              return D->get(i, v) + tie_breakers[v->id] + dh_values[v->id] <
-                     D->get(i, u) + tie_breakers[u->id] + dh_values[u->id];
+              return D->get(i, v) + 0.001 * tie_breakers[v->id] + 0.01 * (float)dh_values[v->id] <
+                     D->get(i, u) + 0.001 * tie_breakers[u->id] + 0.01 * (float)dh_values[u->id];
             });    
   }
 
