@@ -56,7 +56,7 @@ void PairWiseDB::construct() {
                   << "] " << (pct / 1000) << "." << std::setw(3) << std::setfill('0') << (pct % 1000) << "%" << std::flush;
       }
 
-      populate_zero_dh_by_bfs(D, G->V[i_g], G->V[j_g]);
+      // populate_zero_dh_by_bfs(D, G->V[i_g], G->V[j_g]);
 
       std::string tmp_path   = DB_PATH + name + "/" + std::to_string(i_g) + "_" + std::to_string(j_g) + ".bin";
       std::string final_path = DB_PATH + name + "/" + std::to_string(i_g) + "_" + std::to_string(j_g) + ".bin";
@@ -76,8 +76,8 @@ void PairWiseDB::construct() {
             if (D->get(i_s, j_s) > PairWiseDB::RADIUS) continue;
             ++result.evaluated;
 
-            int ek = i_s * D->K + j_s;
-            if (shared_zero_dh_gen[ek] == shared_zero_current_gen) continue;
+            // int ek = i_s * D->K + j_s;
+            // if (shared_zero_dh_gen[ek] == shared_zero_current_gen) continue;
 
             if (can_interfere(D_ptr, i_s, i_g, j_s, j_g)) {
               Vertex* vi_s = G_ref.V[i_s];
@@ -138,7 +138,7 @@ void PairWiseDB::construct_for_instance(const Config& goals) {
                   << "] " << (pct / 1000) << "." << std::setw(3) << std::setfill('0') << (pct % 1000) << "%" << std::flush;
       }
 
-      populate_zero_dh_by_bfs(D, G->V[i_g], G->V[j_g]);
+      // populate_zero_dh_by_bfs(D, G->V[i_g], G->V[j_g]);
 
       std::string tmp_path   = DB_PATH + name + "/tmp_" + std::to_string(i_g) + "_" + std::to_string(j_g) + ".bin";
       std::string final_path = DB_PATH + name + "/"     + std::to_string(i_g) + "_" + std::to_string(j_g) + ".bin";
@@ -158,9 +158,8 @@ void PairWiseDB::construct_for_instance(const Config& goals) {
             if (D->get(i_s, j_s) > PairWiseDB::RADIUS) continue;
             ++result.evaluated;
 
-            int ek = i_s * D->K + j_s;
-
-            if (shared_zero_dh_gen[ek] == shared_zero_current_gen) continue;
+            // int ek = i_s * D->K + j_s;
+            // if (shared_zero_dh_gen[ek] == shared_zero_current_gen) continue;
 
             if (can_interfere(D_ptr, i_s, i_g, j_s, j_g)) {
               Vertex* vi_s = G_ref.V[i_s];
