@@ -87,9 +87,9 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
   return success;
 }
 
-void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to)
+void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to, const int start)
 {
-  for (int k = 0; k < num_neighbors; ++k) {
+  for (int k = start; k < num_neighbors; ++k) {
     Vertex* u_i = neighbors[k];
     float max_penalty = 0;
 
@@ -164,15 +164,6 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
   if (swap_agent != NO_AGENT) {
     // reverse vertex scoring
     std::reverse(C_next[i].begin(), C_next[i].begin() + K + 1);
-  } else if (pair_db != nullptr) {
-    fill_dh_values(i, C_next[i], K + 1, Q_from, Q_to);
-    std::sort(C_next[i].begin(), C_next[i].begin() + K + 1,
-            [&](Vertex *const v, Vertex *const u) {
-              if (v == prioritized_vertex) return true;
-              if (u == prioritized_vertex) return false;
-              return D->get(i, v) + tie_breakers[v->id] + dh_values[v->id] <
-                     D->get(i, u) + tie_breakers[u->id] + dh_values[u->id];
-            });    
   }
 
   auto swap_operation = [&]() {
@@ -186,15 +177,34 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
     }
   };
 
+  // dh_values applied lazily on first detected tie in the main loop
+  bool dh_filled = (pair_db == nullptr || swap_agent != NO_AGENT);
+
   // main loop
   for (size_t k = 0; k < K + 1; ++k) {
+    // 1. Evaluate ties and sort FIRST
+    if (!dh_filled && k < K && C_next[i][k] != prioritized_vertex &&
+        D->get(i, C_next[i][k]->id) == D->get(i, C_next[i][k + 1]->id)) {
+      
+      fill_dh_values(i, C_next[i], K + 1, Q_from, Q_to, k);
+      
+      std::sort(C_next[i].begin() + k, C_next[i].begin() + K + 1,
+              [&](Vertex *const v, Vertex *const u_sort) {
+                if (v == prioritized_vertex) return true;
+                if (u_sort == prioritized_vertex) return false;
+                return D->get(i, v) + tie_breakers[v->id] + dh_values[v->id] <
+                       D->get(i, u_sort) + tie_breakers[u_sort->id] + dh_values[u_sort->id];
+              });
+      
+      dh_filled = true;
+    }
+
     auto u = C_next[i][k];
 
     // avoid vertex conflicts
     if (occupied_next[u->id] != NO_AGENT) continue;
 
-    const auto j = occupied_now[u->id];
-
+    auto j = occupied_now[u->id];
     // avoid swap conflicts with constraints
     if (j != NO_AGENT && Q_to[j] == Q_from[i]) continue;
 

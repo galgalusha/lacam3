@@ -56,7 +56,7 @@ struct PIBT {
                         Vertex *v_pusher_origin, Vertex *v_puller_origin);
   bool is_swap_possible(Vertex *v_pusher_origin, Vertex *v_puller_origin);
 
-  void fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to);
+  void fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to, const int start = 0);
 
   inline int pair_key(int i, int j) { 
     int lo = std::min(i, j), hi = std::max(i, j);
