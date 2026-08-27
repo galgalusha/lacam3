@@ -40,6 +40,7 @@ struct Planner {
   const int V_size;
   DistTable *D;
   bool delete_dist_table_after_used;
+  double last_restart_ratio;
 
   // heuristic
   Heuristic *heuristic;

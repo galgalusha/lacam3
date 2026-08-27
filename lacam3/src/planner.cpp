@@ -21,7 +21,16 @@ std::string Planner::MSG;
 int Planner::CHECKPOINTS_DURATION = 5000;
 constexpr int CHECKPOINTS_NIL = -1;
 
+const int PIBT_DEADLOCK_ATTEMPTS = 500;
+const int PIBT_LIVELOCK_ATTEMPTS = 500;
+
 constexpr auto TIME_ZERO = std::chrono::seconds(0);
+
+int get_depth(HNode *H) {
+  int depth = 0;
+  while (H->parent != nullptr) { H = H->parent; depth++; }
+  return depth;
+}
 
 Planner::Planner(const Instance *_ins, int _verbose, const Deadline *_deadline,
                  int _seed, int _depth, DistTable *_D)
@@ -70,6 +79,32 @@ Solution Planner::solve()
   set_scatter();
   set_pibt();
 
+  int pibt_deadlock_attempts = PIBT_DEADLOCK_ATTEMPTS;
+  int pibt_livelock_attempts = PIBT_LIVELOCK_ATTEMPTS;
+  int restart_count = 0;
+  
+  static const std::vector<double> RESTART_RATIOS = {0.6, 0.55, 0.5, 0.45, 0.35, 0.25, 0.0};
+
+  auto do_restart = [&](const std::string reason) {
+    pibt_deadlock_attempts = PIBT_DEADLOCK_ATTEMPTS;
+    pibt_livelock_attempts = PIBT_LIVELOCK_ATTEMPTS;
+    restart_count++;
+
+    HNode *restart_node = H_init;
+    int depth = 0;
+    if (H_goal != nullptr) {
+      last_restart_ratio = RESTART_RATIOS[restart_count % RESTART_RATIOS.size()];
+      depth = get_depth(H_goal);
+      const int new_depth = static_cast<int>(depth * last_restart_ratio);
+      // traverse (depth - new_depth) parent links back from H_goal
+      restart_node = H_goal;
+      for (int i = 0; i < depth - new_depth; ++i) restart_node = restart_node->parent;
+    }
+
+    OPEN.push_front(restart_node);
+    info(0, 1, deadline, "\tRestart at iteration: ", search_iter, "\tdepth: ", depth, "\t", reason);
+  };  
+
   // search loop
   while (!OPEN.empty() && !is_expired(deadline)) {
     search_iter += 1;
@@ -89,16 +124,17 @@ Solution Planner::solve()
     // do not pop here!
     auto H = OPEN.front();
 
-    // random insert after initial solution found
-    if (H_goal != nullptr && get_random_float(MT) < RANDOM_INSERT_PROB2) {
-      H = FLG_RANDOM_INSERT_INIT_NODE
-              ? H_init
-              : OPEN[get_random_int(MT, 0, OPEN.size() - 1)];
-    }
+    // // random insert after initial solution found
+    // if (H_goal != nullptr && get_random_float(MT) < RANDOM_INSERT_PROB2) {
+    //   H = FLG_RANDOM_INSERT_INIT_NODE
+    //           ? H_init
+    //           : OPEN[get_random_int(MT, 0, OPEN.size() - 1)];
+    // }
 
     // check lower bounds
     if (H_goal != nullptr && H->f >= H_goal->f) {
       OPEN.pop_front();
+      do_restart("pruning");
       continue;
     }
 
@@ -110,6 +146,7 @@ Solution Planner::solve()
       info(1, verbose, deadline, "found initial solution, cost: ", H_goal->g);
       if (!FLG_STAR) break;  // finish search
       set_refiner();         // refining start
+      do_restart("after initial");
       continue;
     }
 
@@ -124,19 +161,33 @@ Solution Planner::solve()
     auto Q_to = Config(N, nullptr);
     auto res = set_new_config(H, L, Q_to);
     delete L;
-    if (!res) continue;
+
+    // failed? retry
+    if (!res) {
+      if (H_goal != nullptr && --pibt_deadlock_attempts == 0) {
+        if (depth > 0) break;
+        do_restart("deadlock");
+      }
+      continue;
+    };    
 
     // check explored list
     auto iter = EXPLORED.find(Q_to);
     if (iter != EXPLORED.end()) {
+      auto g = H->g + get_edge_cost(H->C, Q_to);
+      auto h = heuristic->get(Q_to);
+      auto f = g + h;
+      if (f >= iter->second->f && H_goal != nullptr) {
+        // We found a worse (or equal) path to a known configuration.
+        // Deterministically drop this branch. 
+        // By continuing without pushing, OPEN.front() remains H, 
+        // forcing H to generate a novel low-level node on the next iteration.
+        // OPEN.pop_front();
+        continue;
+      }
       // known configuration
       rewrite(H, iter->second);
-
-      if (get_random_float(MT) >= RANDOM_INSERT_PROB1) {
-        OPEN.push_front(iter->second);  // usual
-      } else {
-        OPEN.push_front(H_init);  // sometimes
-      }
+      OPEN.push_front(iter->second);
     } else {
       // new one -> insert
       auto H_new = create_highlevel_node(Q_to, H);
@@ -261,7 +312,7 @@ void Planner::rewrite(HNode *H_from, HNode *H_to)
       auto g_val = n_from->g + get_edge_cost(n_from->C, n_to->C);
       if (g_val < n_to->g) {
         if (n_to == H_goal)
-          info(2, verbose, deadline, "cost update: ", H_goal->g, " -> ", g_val);
+          info(2, verbose, deadline, "last_restart_ratio: ", last_restart_ratio, ", cost update: ", H_goal->g, " -> ", g_val);
         n_to->g = g_val;
         n_to->f = n_to->g + n_to->h;
         n_to->parent = n_from;
