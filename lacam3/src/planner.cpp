@@ -22,7 +22,6 @@ int Planner::CHECKPOINTS_DURATION = 5000;
 constexpr int CHECKPOINTS_NIL = -1;
 
 const int PIBT_DEADLOCK_ATTEMPTS = 500;
-const int PIBT_LIVELOCK_ATTEMPTS = 500;
 
 constexpr auto TIME_ZERO = std::chrono::seconds(0);
 
@@ -80,14 +79,13 @@ Solution Planner::solve()
   set_pibt();
 
   int pibt_deadlock_attempts = PIBT_DEADLOCK_ATTEMPTS;
-  int pibt_livelock_attempts = PIBT_LIVELOCK_ATTEMPTS;
   int restart_count = 0;
   
-  static const std::vector<double> RESTART_RATIOS = {0.6, 0.55, 0.5, 0.45, 0.35, 0.25, 0.0};
+  //static const std::vector<double> RESTART_RATIOS = {0.6, 0.55, 0.5, 0.45, 0.35, 0.25, 0.0};
+  static const std::vector<double> RESTART_RATIOS = {0.0, 0.0, 0.0, 0.25, 0.35, 0.45, 0.55, 0.6};
 
   auto do_restart = [&](const std::string reason) {
     pibt_deadlock_attempts = PIBT_DEADLOCK_ATTEMPTS;
-    pibt_livelock_attempts = PIBT_LIVELOCK_ATTEMPTS;
     restart_count++;
 
     HNode *restart_node = H_init;
