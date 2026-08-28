@@ -20,16 +20,21 @@ double Planner::RECURSIVE_TIME_LIMIT = 1000;
 std::string Planner::MSG;
 int Planner::CHECKPOINTS_DURATION = 5000;
 constexpr int CHECKPOINTS_NIL = -1;
-
 const int PIBT_DEADLOCK_ATTEMPTS = 500;
-
 constexpr auto TIME_ZERO = std::chrono::seconds(0);
+const std::vector<double> SPD_RATIOS = {0.0, 0.0, 0.0, 0.25, 0.35, 0.45, 0.55, 0.6};
 
-int get_depth(HNode *H) {
-  int depth = 0;
-  while (H->parent != nullptr) { H = H->parent; depth++; }
-  return depth;
+
+HNode* SPD::get_node_for_restart(HNode* H, HNode* H_goal) {
+  double ratio = SPD_RATIOS[restart_count % SPD_RATIOS.size()];
+  int depth = H_goal->depth;
+  const int new_depth = static_cast<int>(depth * ratio);
+  HNode* restart_node = H_goal;
+  for (int i = 0; i < depth - new_depth; ++i) restart_node = restart_node->parent;
+  restart_count++;
+  return restart_node;
 }
+
 
 Planner::Planner(const Instance *_ins, int _verbose, const Deadline *_deadline,
                  int _seed, int _depth, DistTable *_D)
@@ -79,28 +84,12 @@ Solution Planner::solve()
   set_pibt();
 
   int pibt_deadlock_attempts = PIBT_DEADLOCK_ATTEMPTS;
-  int restart_count = 0;
-  
-  //static const std::vector<double> RESTART_RATIOS = {0.6, 0.55, 0.5, 0.45, 0.35, 0.25, 0.0};
-  static const std::vector<double> RESTART_RATIOS = {0.0, 0.0, 0.0, 0.25, 0.35, 0.45, 0.55, 0.6};
 
-  auto do_restart = [&](const std::string reason) {
+  auto do_restart = [&](HNode* H, const std::string reason) {
     pibt_deadlock_attempts = PIBT_DEADLOCK_ATTEMPTS;
-    restart_count++;
-
-    HNode *restart_node = H_init;
-    int depth = 0;
-    if (H_goal != nullptr) {
-      last_restart_ratio = RESTART_RATIOS[restart_count % RESTART_RATIOS.size()];
-      depth = get_depth(H_goal);
-      const int new_depth = static_cast<int>(depth * last_restart_ratio);
-      // traverse (depth - new_depth) parent links back from H_goal
-      restart_node = H_goal;
-      for (int i = 0; i < depth - new_depth; ++i) restart_node = restart_node->parent;
-    }
-
+    HNode *restart_node = restarter->get_node_for_restart(H, H_goal);
     OPEN.push_front(restart_node);
-    info(0, 1, deadline, "\tRestart at iteration: ", search_iter, "\tdepth: ", depth, "\t", reason);
+    info(0, 1, deadline, "\tRestart at iteration: ", search_iter, "\tat depth: ", H->depth, "\tto depth: ", restart_node->depth, "\t", reason);
   };  
 
   // search loop
@@ -122,17 +111,15 @@ Solution Planner::solve()
     // do not pop here!
     auto H = OPEN.front();
 
-    // // random insert after initial solution found
-    // if (H_goal != nullptr && get_random_float(MT) < RANDOM_INSERT_PROB2) {
-    //   H = FLG_RANDOM_INSERT_INIT_NODE
-    //           ? H_init
-    //           : OPEN[get_random_int(MT, 0, OPEN.size() - 1)];
-    // }
+    if (restarter->should_restart_now(H)) {
+      do_restart(H, "Restarter::should_restart_now");
+      continue;
+    }
 
     // check lower bounds
-    if (H_goal != nullptr && H->f >= H_goal->f) {
+    if (restarter->should_prune(H, H_goal)) {
       OPEN.pop_front();
-      do_restart("pruning");
+      do_restart(H, "pruning");
       continue;
     }
 
@@ -144,7 +131,8 @@ Solution Planner::solve()
       info(1, verbose, deadline, "found initial solution, cost: ", H_goal->g);
       if (!FLG_STAR) break;  // finish search
       set_refiner();         // refining start
-      do_restart("after initial");
+      restarter->on_found_goal(H_goal);
+      do_restart(H, "after initial");
       continue;
     }
 
@@ -164,7 +152,7 @@ Solution Planner::solve()
     if (!res) {
       if (H_goal != nullptr && --pibt_deadlock_attempts == 0) {
         if (depth > 0) break;
-        do_restart("deadlock");
+        do_restart(H, "deadlock");
       }
       continue;
     };    
@@ -309,11 +297,14 @@ void Planner::rewrite(HNode *H_from, HNode *H_to)
     for (auto n_to : n_from->neighbor) {
       auto g_val = n_from->g + get_edge_cost(n_from->C, n_to->C);
       if (g_val < n_to->g) {
-        if (n_to == H_goal)
-          info(2, verbose, deadline, "last_restart_ratio: ", last_restart_ratio, ", cost update: ", H_goal->g, " -> ", g_val);
         n_to->g = g_val;
         n_to->f = n_to->g + n_to->h;
         n_to->parent = n_from;
+        n_to->depth = n_from->depth + 1;
+        if (n_to == H_goal) {
+          info(2, verbose, deadline, "cost update: ", g_val);
+          restarter->on_cost_update(H_goal);
+        }
         Q.push(n_to);
         if (H_goal != nullptr && n_to->f < H_goal->f) OPEN.push_front(n_to);
       }

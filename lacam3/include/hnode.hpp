@@ -18,6 +18,7 @@ struct HNode {
 
   const Config C;
   HNode *parent;
+  int depth;
   std::set<HNode *, CompareHNodePointers> neighbor;
 
   // value
