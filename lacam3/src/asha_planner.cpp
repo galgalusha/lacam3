@@ -6,7 +6,7 @@
 
 const int PIBT_DEADLOCK_ATTEMPTS = 500;
 constexpr auto TIME_ZERO = std::chrono::seconds(0);
-const std::vector<double> SPD_RATIOS = {0.0, 0.0, 0.0, 0.25, 0.35, 0.45, 0.55, 0.6};
+const std::vector<double> SPD_RATIOS = {0.0, 0.25, 0.35, 0.45, 0.55, 0.6};
 
 const double BASE_HORIZON = 0.25;
 const double EVAL_ERROR   = 0.03;
@@ -59,6 +59,10 @@ Solution ASHA_Planner::solve()
   int best_cost = H_goal->g;
   int end_depth = res_init.H->depth;
 
+  HNode* best_H_candidate = nullptr;
+  int best_candidate_score = INT_MAX;
+  int best_candidate_iters = end_iters;
+
   // 4. Repeat for 4 candidates (Candidate 0 uses the initial path)
   for (int cand_idx = 0; cand_idx < NUM_OF_CANDIDATES; ++cand_idx) {
     std::cout << "\n[ASHA] t=" << elapsed_ms(deadline) << "ms === Generating Candidate " << cand_idx << " ===\n";
@@ -68,8 +72,9 @@ Solution ASHA_Planner::solve()
     //
     // generation
     //    
+    int cand_gen_iters = end_iters;
     if (cand_idx == 0) {
-      H_end = H_goal; 
+      H_end = H_goal;
     } else {
       // Reuse H_init for candidates 1, 2, and 3
       int iter_budget = end_iters * 3;
@@ -80,7 +85,8 @@ Solution ASHA_Planner::solve()
         continue;
       } else {
         H_end = res.H;
-        std::cout << "[ASHA] t=" << elapsed_ms(deadline) << "ms Candidate " << cand_idx << " generated. Depth=" << H_end->depth << ", cost=" << H_end->g, "\n";
+        cand_gen_iters = res.iterations;
+        std::cout << "[ASHA] t=" << elapsed_ms(deadline) << "ms Candidate " << cand_idx << " generated. Depth=" << H_end->depth << ", cost=" << H_end->g << "\n";
       }
     }
 
@@ -90,15 +96,15 @@ Solution ASHA_Planner::solve()
     int makespan = H_end->depth;
     int base_horizon = static_cast<int>(makespan * BASE_HORIZON);
     
-    HNode* H_eval_start = H_end;
-    while (H_eval_start != nullptr && H_eval_start->depth > base_horizon) {
-      H_eval_start = H_eval_start->parent;
+    HNode* H_candidate = H_end;
+    while (H_candidate != nullptr && H_candidate->depth > base_horizon) {
+      H_candidate = H_candidate->parent;
     }
 
     std::cout << "[ASHA] t=" << elapsed_ms(deadline) << "ms Cand " << cand_idx << " | Makespan: " << makespan 
-              << " | H_mid depth: " << (H_eval_start ? H_eval_start->depth : -1) << "\n";
+              << " | H_mid depth: " << (H_candidate ? H_candidate->depth : -1) << "\n";
 
-    if (H_eval_start == nullptr) continue;
+    if (H_candidate == nullptr) continue;
 
     int eval_iter_budget = end_iters; // Example budget
     int eval_ub = static_cast<int>(best_cost * 1.5);
@@ -111,18 +117,55 @@ Solution ASHA_Planner::solve()
     int f_error = H_end->g - H_error->f;
     std::cout << "Eval depth: " << eval_depth << ", ratio: " << ((float)eval_depth)/((float)H_end->depth) << ", error: " << f_error << std::endl;
 
-      // 3. run_lacam 4 more times from H_mid with budgets
+    // 3. run_lacam 4 more times from H_mid with budgets
+    int eval_f_error_sum = 0;
+    int eval_successes = 0;
     for (int eval_idx = 0; eval_idx < 4; ++eval_idx) {
-      auto eval_res = run_lacam(H_eval_start, eval_iter_budget, eval_ub, eval_depth);
-      
-      std::cout << "  -> [EVAL " << eval_idx << "] t=" << elapsed_ms(deadline) << "ms Cand " << cand_idx << " (Run from H_mid) " 
+      auto eval_res = run_lacam(H_candidate, eval_iter_budget, eval_ub, eval_depth);
+
+      std::cout << "  -> [EVAL " << eval_idx << "] t=" << elapsed_ms(deadline) << "ms Cand " << cand_idx << " (Run from H_mid) "
                 << "| Success: " << eval_res.is_success
-                << "| Iters: " << eval_res.iterations 
+                << "| Iters: " << eval_res.iterations
                 << "| Final Depth: " << (eval_res.H ? eval_res.H->depth : -1)
-                << "| f+error: " << (eval_res.H ? eval_res.H->f + f_error : -1) 
+                << "| f+error: " << (eval_res.H ? eval_res.H->f + f_error : -1)
                 << "\n";
+
+      if (eval_res.is_success && eval_res.H != nullptr) {
+        eval_f_error_sum += eval_res.H->f + f_error;
+        ++eval_successes;
+      }
+    }
+
+    if (eval_successes > 0) {
+      int score = eval_f_error_sum / eval_successes;
+      std::cout << "[ASHA] t=" << elapsed_ms(deadline) << "ms Cand " << cand_idx << " score=" << score << "\n";
+      if (score < best_candidate_score) {
+        best_candidate_score = score;
+        best_H_candidate = H_candidate;
+        best_candidate_iters = cand_gen_iters;
+      }
     }
   }
+
+  //
+  // Part 2: exploitation
+  //
+  int exploit_max_iters = static_cast<int>(best_candidate_iters * 1.5);
+  std::cout << "[ASHA] t=" << elapsed_ms(deadline) << "ms Starting exploitation from best candidate (score=" << best_candidate_score << ", iters_budget=" << exploit_max_iters << ")\n";
+  int restart_count = 0;
+  while (!is_expired(deadline)) {
+    double ratio = SPD_RATIOS[restart_count % SPD_RATIOS.size()];
+    int depth = (H_goal->depth - best_H_candidate->depth) * ratio;
+    HNode* H_start = H_goal;
+    while (H_start->depth > depth) H_start = H_start->parent;
+    std::cout << "[ASHA] t=" << elapsed_ms(deadline) << "ms Exploiting from ratio: " << ratio << ", depth: " << depth << "\n";
+    auto exploit_res = run_lacam(H_start, exploit_max_iters, H_goal->g, H_goal->depth * 1.5);
+    restart_count++;
+  }
+
+  //
+  // extract solution from H_goal
+  //
 
   Solution solution = backtrack(H_goal);
   for (auto p : EXPLORED) delete p.second;
