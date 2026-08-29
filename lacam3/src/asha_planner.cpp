@@ -8,7 +8,9 @@ const int PIBT_DEADLOCK_ATTEMPTS = 500;
 constexpr auto TIME_ZERO = std::chrono::seconds(0);
 const std::vector<double> SPD_RATIOS = {0.0, 0.0, 0.0, 0.25, 0.35, 0.45, 0.55, 0.6};
 
-
+const double BASE_HORIZON = 0.25;
+const double EVAL_ERROR   = 0.03;
+const int NUM_OF_CANDIDATES = 8;
 
 ASHA_Planner::ASHA_Planner(const Instance *_ins, int _verbose, const Deadline *_deadline,
                  int _seed, DistTable *_D)
@@ -58,18 +60,21 @@ Solution ASHA_Planner::solve()
   int end_depth = res_init.H->depth;
 
   // 4. Repeat for 4 candidates (Candidate 0 uses the initial path)
-  for (int cand_idx = 0; cand_idx < 4; ++cand_idx) {
+  for (int cand_idx = 0; cand_idx < NUM_OF_CANDIDATES; ++cand_idx) {
     std::cout << "\n[ASHA] t=" << elapsed_ms(deadline) << "ms === Generating Candidate " << cand_idx << " ===\n";
     
     HNode* H_end = nullptr;
 
+    //
+    // generation
+    //    
     if (cand_idx == 0) {
       H_end = H_goal; 
     } else {
       // Reuse H_init for candidates 1, 2, and 3
       int iter_budget = end_iters * 3;
-      int ub_budget = static_cast<int>(best_cost * 2);
-      auto res = run_lacam(H_init, iter_budget, ub_budget, end_depth * 1.5);
+      int ub_budget = static_cast<int>(best_cost * 1.5);
+      auto res = run_lacam(H_init, iter_budget, ub_budget, end_depth * 2);
       if (!res.is_goal || !res.is_success) {
         std::cout << "[ASHA] t=" << elapsed_ms(deadline) << "ms Candidate " << cand_idx << " generation failed. Skipping.\n";
         continue;
@@ -79,32 +84,43 @@ Solution ASHA_Planner::solve()
       }
     }
 
-    // 2. Set H_mid to a depth of 0.5 of the current makespan
+    //
+    // evaluation
+    //
     int makespan = H_end->depth;
-    int target_mid = static_cast<int>(makespan * 0.5);
+    int base_horizon = static_cast<int>(makespan * BASE_HORIZON);
     
-    HNode* H_mid = H_end;
-    while (H_mid != nullptr && H_mid->depth > target_mid) {
-      H_mid = H_mid->parent;
+    HNode* H_eval_start = H_end;
+    while (H_eval_start != nullptr && H_eval_start->depth > base_horizon) {
+      H_eval_start = H_eval_start->parent;
     }
 
     std::cout << "[ASHA] t=" << elapsed_ms(deadline) << "ms Cand " << cand_idx << " | Makespan: " << makespan 
-              << " | H_mid depth: " << (H_mid ? H_mid->depth : -1) << "\n";
+              << " | H_mid depth: " << (H_eval_start ? H_eval_start->depth : -1) << "\n";
 
-    if (H_mid == nullptr) continue;
+    if (H_eval_start == nullptr) continue;
 
-    // 3. run_lacam 4 more times from H_mid with budgets
+    int eval_iter_budget = end_iters; // Example budget
+    int eval_ub = static_cast<int>(best_cost * 1.5);
+    HNode *H_error_next = H_end, *H_error;
+    while (((float)(H_end->g - H_error_next->f))/((float)H_end->g) < EVAL_ERROR) {
+      H_error = H_error_next;
+      H_error_next = H_error_next->parent;
+    }
+    int eval_depth = H_error->depth;
+    int f_error = H_end->g - H_error->f;
+    std::cout << "Eval depth: " << eval_depth << ", ratio: " << ((float)eval_depth)/((float)H_end->depth) << ", error: " << f_error << std::endl;
+
+      // 3. run_lacam 4 more times from H_mid with budgets
     for (int eval_idx = 0; eval_idx < 4; ++eval_idx) {
-      int eval_iter_budget = end_iters; // Example budget
-      int eval_ub = static_cast<int>(best_cost * 1.5);
+      auto eval_res = run_lacam(H_eval_start, eval_iter_budget, eval_ub, eval_depth);
       
-      auto eval_res = run_lacam(H_mid, eval_iter_budget, eval_ub, H_mid->depth * 1.5);
-      
-      std::cout << "  -> [EVAL " << eval_idx << "] t=" << elapsed_ms(deadline) << "ms Cand 0 (Run from H_mid) " 
+      std::cout << "  -> [EVAL " << eval_idx << "] t=" << elapsed_ms(deadline) << "ms Cand " << cand_idx << " (Run from H_mid) " 
                 << "| Success: " << eval_res.is_success
                 << "| Iters: " << eval_res.iterations 
                 << "| Final Depth: " << (eval_res.H ? eval_res.H->depth : -1)
-                << "| f-value: " << (eval_res.H ? eval_res.H->f : -1) << "\n";
+                << "| f+error: " << (eval_res.H ? eval_res.H->f + f_error : -1) 
+                << "\n";
     }
   }
 
@@ -121,15 +137,6 @@ ASHA_Planner::LaCAM_Res ASHA_Planner::run_lacam(HNode* H_from, int max_iteration
   while (search_iter <= max_iterations && !is_expired(deadline) && H->depth <= max_depth && H->f <= upper_bound) {
     search_iter += 1;
 
-    if (is_same_config(H->C, ins->goals)) {
-      if (H_goal == nullptr) H_goal = H;
-      if (H->g < H_goal->g) { 
-        H_goal->g = H->g; H_goal->h = H->h; H_goal->f = H->f; H_goal->parent = H->parent; H_goal->depth = H->depth;
-      }
-      info(1, verbose, deadline, "found goal, cost: ", H_goal->g);
-      return { H, search_iter, true, true };
-    }
-
     // low level search
     auto L = H->get_next_lowlevel_node(MT);
     if (L == nullptr) {
@@ -145,6 +152,20 @@ ASHA_Planner::LaCAM_Res ASHA_Planner::run_lacam(HNode* H_from, int max_iteration
 
     // failed? retry
     if (!res) continue;
+
+    if (is_same_config(Q_to, ins->goals)) {
+      HNode* H_new = create_highlevel_node(Q_to, H);
+      if (H_goal == nullptr) H_goal = H_new;
+      if (H_new->g < H_goal->g) { 
+        H_goal->g = H_new->g; 
+        H_goal->h = H_new->h; 
+        H_goal->f = H_new->f; 
+        H_goal->parent = H_new->parent; 
+        H_goal->depth = H_new->depth;
+      }
+      info(1, verbose, deadline, "found goal, cost: ", H_goal->g);
+      return { H, search_iter, true, true };
+    }
 
     // check explored list
     auto iter = EXPLORED.find(Q_to);
