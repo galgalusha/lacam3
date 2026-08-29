@@ -5,7 +5,7 @@
 #include <pair_wise_bin.hpp>
 #include <pair_wise_db.hpp>
 #include <drawing.hpp>
-
+#include <asha_planner.hpp>
 
 int main(int argc, char *argv[])
 {
@@ -88,6 +88,10 @@ int main(int argc, char *argv[])
       .help("turn off iterative refinement")
       .default_value(false)
       .implicit_value(true);
+  program.add_argument("--asha")
+      .help("use ASHA Planner")
+      .default_value(false)
+      .implicit_value(true);
   program.add_argument("--refiner-num")
       .help("specify the number of refiners")
       .default_value(std::string("4"));
@@ -118,6 +122,7 @@ int main(int argc, char *argv[])
   const auto map_name = program.get<std::string>("map");
   const auto test_pair_db = program.get<bool>("pair-db-test");
   const auto gen_pair_db = program.get<bool>("pair-db-gen");
+  const auto asha_planner = program.get<bool>("asha");
   const auto use_pair_db = program.get<bool>("pair-db");
   if (use_pair_db && (map_name.size() < 4 || map_name.substr(map_name.size() - 4) != ".map")) {
     std::cerr << "error: map file must have a .map extension to use --pair-db" << std::endl;
@@ -200,7 +205,16 @@ int main(int argc, char *argv[])
   // solve
 
   const auto deadline = Deadline(time_limit_sec * 1000);
-  const auto solution = solve(ins, verbose - 1, &deadline, seed);
+
+  Solution solution;
+
+  if (asha_planner) {
+    info(1, verbose, deadline, "pre-processing");
+    auto planner = ASHA_Planner(&ins, verbose, deadline, seed);
+    solution = planner.solve();
+  } else {
+    solution = solve(ins, verbose - 1, &deadline, seed);
+  }
   const auto comp_time_ms = deadline.elapsed_ms();
 
   // failure

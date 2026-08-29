@@ -28,7 +28,7 @@ public:
   inline void on_found_goal(HNode* H_goal) {}
 };
 
-
+/*
 class ASHA : public Restarter {
 private:
     // Hyperparameters
@@ -75,3 +75,4 @@ public:
   void on_found_goal(HNode* H_goal);
 };
 
+*/
