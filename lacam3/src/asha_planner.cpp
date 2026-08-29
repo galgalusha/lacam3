@@ -44,21 +44,22 @@ Solution ASHA_Planner::solve()
 
   H_init = create_highlevel_node(ins->starts, nullptr);
 
-  std::cout << "[ASHA] Finding initial solution from H_init...\n";
+  std::cout << "[ASHA] t=" << elapsed_ms(deadline) << "ms Finding initial solution from H_init...\n";
   auto res_init = run_lacam(H_init, INT_MAX, INT_MAX, INT_MAX);
   
   if (!res_init.is_goal) {
-    std::cout << "[ASHA] Failed to find initial solution.\n";
+    std::cout << "[ASHA] t=" << elapsed_ms(deadline) << "ms Failed to find initial solution.\n";
     for (auto p : EXPLORED) delete p.second;
     return Solution();
   }
 
   int end_iters = res_init.iterations;
   int best_cost = H_goal->g;
+  int end_depth = res_init.H->depth;
 
   // 4. Repeat for 4 candidates (Candidate 0 uses the initial path)
   for (int cand_idx = 0; cand_idx < 4; ++cand_idx) {
-    std::cout << "\n[ASHA] === Generating Candidate " << cand_idx << " ===\n";
+    std::cout << "\n[ASHA] t=" << elapsed_ms(deadline) << "ms === Generating Candidate " << cand_idx << " ===\n";
     
     HNode* H_end = nullptr;
 
@@ -66,16 +67,16 @@ Solution ASHA_Planner::solve()
       H_end = H_goal; 
     } else {
       // Reuse H_init for candidates 1, 2, and 3
-      int iter_budget = end_iters * 1.5;
-      int ub_budget = static_cast<int>(best_cost * 1.5);
-      auto res = run_lacam(H_init, iter_budget, ub_budget, INT_MAX);
-      H_end = res.H;
-      end_iters = res.iterations;
-    }
-
-    if (H_end == nullptr || H_end->depth == 0) {
-      std::cout << "[ASHA] Candidate " << cand_idx << " generation failed. Skipping.\n";
-      continue;
+      int iter_budget = end_iters * 3;
+      int ub_budget = static_cast<int>(best_cost * 2);
+      auto res = run_lacam(H_init, iter_budget, ub_budget, end_depth * 1.5);
+      if (!res.is_goal || !res.is_success) {
+        std::cout << "[ASHA] t=" << elapsed_ms(deadline) << "ms Candidate " << cand_idx << " generation failed. Skipping.\n";
+        continue;
+      } else {
+        H_end = res.H;
+        std::cout << "[ASHA] t=" << elapsed_ms(deadline) << "ms Candidate " << cand_idx << " generated. Depth=" << H_end->depth << ", cost=" << H_end->g, "\n";
+      }
     }
 
     // 2. Set H_mid to a depth of 0.5 of the current makespan
@@ -87,7 +88,7 @@ Solution ASHA_Planner::solve()
       H_mid = H_mid->parent;
     }
 
-    std::cout << "[ASHA] Cand " << cand_idx << " | Makespan: " << makespan 
+    std::cout << "[ASHA] t=" << elapsed_ms(deadline) << "ms Cand " << cand_idx << " | Makespan: " << makespan 
               << " | H_mid depth: " << (H_mid ? H_mid->depth : -1) << "\n";
 
     if (H_mid == nullptr) continue;
@@ -97,9 +98,9 @@ Solution ASHA_Planner::solve()
       int eval_iter_budget = end_iters; // Example budget
       int eval_ub = static_cast<int>(best_cost * 1.5);
       
-      auto eval_res = run_lacam(H_mid, eval_iter_budget, eval_ub, INT_MAX);
+      auto eval_res = run_lacam(H_mid, eval_iter_budget, eval_ub, H_mid->depth * 1.5);
       
-      std::cout << "  -> [EVAL " << eval_idx << "] Cand 0 (Run from H_mid) " 
+      std::cout << "  -> [EVAL " << eval_idx << "] t=" << elapsed_ms(deadline) << "ms Cand 0 (Run from H_mid) " 
                 << "| Success: " << eval_res.is_success
                 << "| Iters: " << eval_res.iterations 
                 << "| Final Depth: " << (eval_res.H ? eval_res.H->depth : -1)
@@ -187,7 +188,7 @@ ASHA_Planner::LaCAM_Res ASHA_Planner::run_lacam(HNode* H_from, int max_iteration
     }
   }
 
-  if (H->depth > max_depth || H->f > upper_bound)
+  if (H->depth - 1 > max_depth || H->f > upper_bound)
     return { H, search_iter, false, false };
 
   return  { H, search_iter, false, true };
@@ -243,6 +244,7 @@ HNode* ASHA_Planner::rewrite(HNode *H_from, HNode *H_to)
         
         if (n_to == H_goal) {
           info(2, verbose, deadline, "cost update: ", g_val);
+          return H_goal;
         }
         Q.push(n_to);
       }

@@ -209,8 +209,8 @@ int main(int argc, char *argv[])
   Solution solution;
 
   if (asha_planner) {
-    info(1, verbose, deadline, "pre-processing");
-    auto planner = ASHA_Planner(&ins, verbose, deadline, seed);
+    info(1, verbose, &deadline, "pre-processing");
+    auto planner = ASHA_Planner(&ins, verbose, &deadline, seed);
     solution = planner.solve();
   } else {
     solution = solve(ins, verbose - 1, &deadline, seed);
