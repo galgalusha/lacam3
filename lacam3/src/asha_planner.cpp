@@ -6,7 +6,7 @@
 
 const int PIBT_DEADLOCK_ATTEMPTS = 500;
 constexpr auto TIME_ZERO = std::chrono::seconds(0);
-const std::vector<double> SPD_RATIOS = {0.0, 0.0, 0.0, 0.0, 0.25, 0.35, 0.45, 0.55, 0.6};
+const std::vector<double> SPD_RATIOS = {0.0, 0.0, 0.25, 0.35, 0.45, 0.55, 0.6};
 
 const double CANDIDATE_HORIZON = 0.3;
 const int KILL_AFTER_STALE_TRIALS = 5;
@@ -26,7 +26,7 @@ int Candidate::next_id = 0;
 static bool should_kill(const std::vector<Candidate>& candidates, int c);
 
 ASHA_Planner::ASHA_Planner(const Instance *_ins, int _verbose, const Deadline *_deadline,
-                 int _seed, DistTable *_D)
+                 int _seed, DistTable *_D, const Config *_prefix_goals)
     : ins(_ins),
       deadline(_deadline),
       seed(_seed),
@@ -35,6 +35,10 @@ ASHA_Planner::ASHA_Planner(const Instance *_ins, int _verbose, const Deadline *_
       N(ins->N),
       V_size(ins->G->size()),
       D((_D == nullptr) ? new DistTable(ins) : _D),
+      delete_dist_table_after_used(false),
+      FLG_PREFIX_REFINEMENT(_prefix_goals != nullptr),
+      prefix_goals(_prefix_goals ? *_prefix_goals : Config{}),
+      dmt((_prefix_goals != nullptr) ? static_cast<DoubleModeDistTable *>(_D) : nullptr),
       heuristic(new Heuristic(ins, D)),
       scatter(nullptr),
       seed_refiner(0),
@@ -46,9 +50,19 @@ ASHA_Planner::ASHA_Planner(const Instance *_ins, int _verbose, const Deadline *_
 
 ASHA_Planner::~ASHA_Planner()
 {
-  if (heuristic != nullptr) delete heuristic;
-  if (scatter != nullptr) delete scatter;
-  delete pibt;
+  // if (heuristic != nullptr) delete heuristic;
+  // if (scatter != nullptr) delete scatter;
+  // delete pibt;
+}
+
+HNode* go_back_to_depth(HNode* H_from, int new_depth) {
+  HNode* H = H_from;
+  while (H->depth > new_depth) H = H->parent;
+  return H;
+}
+
+inline HNode* go_back_to_depth_ratio(HNode* H_from, double ratio) {
+  return go_back_to_depth(H_from, H_from->depth * ratio);
 }
 
 Solution ASHA_Planner::solve()
@@ -57,67 +71,50 @@ Solution ASHA_Planner::solve()
   set_scatter();
   set_pibt();
 
+  //
+  // Find initial solution
+  //
+
   H_init = create_highlevel_node(ins->starts, nullptr);
 
-  std::cout << "[ASHA] t=" << elapsed_ms(deadline) << "ms Finding initial solution from H_init...\n";
+  std::cout << "[ASHA] elapsed:" << std::setw(6) << elapsed_ms(deadline) << "ms  "
+            << "Finding initial solution from H_init... " 
+            << std::endl;
+
   auto res_init = run_lacam(H_init, INT_MAX, INT_MAX, INT_MAX);
 
   if (!res_init.is_goal) {
-    std::cout << "[ASHA] t=" << elapsed_ms(deadline) << "ms Failed to find initial solution.\n";
+    std::cout << "[ASHA] elapsed:" << std::setw(6) << elapsed_ms(deadline) << "ms  "
+              << "Failed" 
+              << std::endl;
     for (auto p : EXPLORED) delete p.second;
     return Solution();
   }
 
-  int max_iterations = res_init.iterations * 3;
-
-  auto create_candidate = [&]() -> Candidate {
-    int upper_bound = H_goal->g; // TODO: it should be a friction of H_goal->g, but we don't yet know how much
-    auto res = run_lacam(H_init, max_iterations, upper_bound, static_cast<int>(H_goal->depth * CANDIDATE_HORIZON));
-    HNode* H = (res.is_success && res.H != nullptr) ? res.H : nullptr;
-    std::cout << "[ASHA] t=" << elapsed_ms(deadline) << "ms create_candidate: depth="
-              << (H ? H->depth : -1) << "\n";
-    return { Candidate::next_id++, H, INT_MAX, 0};
-  };
-
-  std::vector<Candidate> candidates;
-  candidates.reserve(NUM_OF_CANDIDATES);
-  for (int i = 0; i < NUM_OF_CANDIDATES; ++i) candidates.push_back(create_candidate());
+  //
+  // Refine prefix
+  //
+  HNode* H_start = refine_prefix(res_init);
+  if (H_start == nullptr) return backtrack(H_goal);
 
   //
-  // Main loop: iterate over candidates, run all SPD_RATIOS, refresh stale ones
+  // Refine suffix
   //
+  int iter = 0;
+  H_goal = nullptr;
   while (!is_expired(deadline)) {
-    for (int c = 0; c < (int)candidates.size() && !is_expired(deadline); ++c) {
-      if (should_kill(candidates, c)) {
-        std::cout << "[ASHA] t=" << elapsed_ms(deadline) << "ms Killing candidate " << c << " (stale), replacing.\n";
-        candidates[c] = create_candidate();
-      }
-
-      auto& cand = candidates[c];
-      if (cand.H == nullptr) continue;
-
-      int cost_before_trial = H_goal->g;
-
-      // for (double ratio : SPD_RATIOS) {
-      //   if (is_expired(deadline)) break;
-      //   int depth = cand.H->depth + static_cast<int>((H_goal->depth - cand.H->depth) * ratio);
-      //   HNode* H_start = H_goal;
-      //   while (H_start != nullptr && H_start->depth > depth) H_start = H_start->parent;
-      //   if (H_start == nullptr) H_start = cand.H;
-
-      //   std::cout << "[ASHA] t=" << elapsed_ms(deadline) << "ms cand=" << cand.id
-      //             << " ratio=" << ratio << " depth=" << depth << " best_cost=" << H_goal->g << "\n";
-      //   run_lacam(H_start, max_iterations, H_goal->g, H_goal->depth);
-      // }
-      run_lacam(cand.H, max_iterations, H_goal->g, H_goal->depth);
-
-      if (H_goal->g < cost_before_trial) {
-        cand.min_cost = H_goal->g;
-        cand.trials_since_last_update = 0;
-      } else {
-        ++cand.trials_since_last_update;
-      }
+    std::cout << "[ASHA] elapsed:" << std::setw(6) << elapsed_ms(deadline) << "ms  "
+              << "Finding suffix. iter: " << iter
+              << std::endl;
+    int UB = H_goal == nullptr ? res_init.H->g * 1.25 : H_goal->g;
+    int max_depth = H_goal == nullptr ? res_init.H->depth * 1.5 : H_goal->depth * 1.5;
+    if (H_goal != nullptr) {
+      int depth = SPD_RATIOS[iter % SPD_RATIOS.size()] * H_goal->depth;
+      HNode* H_mid = go_back_to_depth(H_goal, depth);
+      run_lacam(H_mid, res_init.iterations, UB, max_depth);
     }
+    else run_lacam(H_start, res_init.iterations, UB, max_depth);
+    iter++;
   }
 
   //
@@ -128,6 +125,99 @@ Solution ASHA_Planner::solve()
   for (auto p : EXPLORED) delete p.second;
   return solution;
 }
+
+HNode* ASHA_Planner::refine_prefix(LaCAM_Res& res_init) {
+  HNode* p_H_goal = go_back_to_depth_ratio(H_goal, 0.25);
+  Config prefix_goals_cfg = p_H_goal->C;
+
+  // D (toward real goals) already exists; build D_prefix toward prefix goals
+  Instance p_ins_for_d(ins->G, ins->starts, prefix_goals_cfg, ins->N);
+  auto *D_prefix = new DistTable(&p_ins_for_d);
+  auto *p_dmt = new DoubleModeDistTable(ins->G->size(), D_prefix, D);
+
+  ASHA_Planner planner(ins, verbose, deadline,
+                        get_random_int(MT, 0, 10000000), p_dmt, &prefix_goals_cfg);
+  planner.set_scatter();
+  planner.set_pibt();
+  int MAX_FAILURES = 10;
+  int trials_left = MAX_FAILURES;
+  int max_depth =  H_goal->depth * 1.5;
+  int best_cost = p_H_goal->g;
+  int upper_bound = best_cost * 1.2;
+  int max_iters = res_init.iterations * 1.5;
+  HNode* H_best = nullptr;
+  HNode* p_H_init = planner.create_highlevel_node(ins->starts, nullptr);
+
+  while (!is_expired(deadline) && trials_left--) {
+    std::cout << "[ASHA] elapsed:" << std::setw(6) << elapsed_ms(deadline) << "ms  "
+              << "Running prefix refinement. Trials left: " << trials_left 
+              << ", mid depth: " << p_H_goal->depth << ", mid g: " << p_H_goal->g
+              << ", UB: " << upper_bound
+              << std::endl;
+    auto res = planner.run_lacam(p_H_init, max_iters, upper_bound, max_depth);
+    if (res.is_success && res.H->g < best_cost) {
+      std::cout << "Cost update: " << res.H->g << std::endl;
+      best_cost = res.H->g;
+      upper_bound = res.H->g * 1.2;
+      H_best = res.H;
+      trials_left = MAX_FAILURES;
+    } else {
+      std::cout << "[ASHA] elapsed:" << std::setw(6) << elapsed_ms(deadline) << "ms  "
+                << "Trial failed. is_success: " << res.is_success 
+                << ", depth: " << res.H->depth << ", max_depth: " << max_depth
+                << ", iters: " << res.iterations << ", max_iters: " << max_iters 
+                << ", g: " << res.H->g << ", f: " << res.H->f << ", UB: " << upper_bound
+                << std::endl;
+    }
+  }
+  delete D_prefix;
+  delete p_dmt;
+  if (H_best == nullptr) return nullptr;
+  H_best = go_back_to_depth(H_best, p_H_goal->depth);
+
+  // Collect original plan nodes indexed by depth
+  std::vector<HNode *> orig_by_depth(p_H_goal->depth + 1, nullptr);
+  for (HNode *H = p_H_goal; H != nullptr; H = H->parent)
+    orig_by_depth[H->depth] = H;
+
+  // Collect refined plan nodes indexed by depth
+  std::vector<HNode *> refined_by_depth(H_best->depth + 1, nullptr);
+  for (HNode *H = H_best; H != nullptr; H = H->parent)
+    refined_by_depth[H->depth] = H;
+
+  // Recalculate g, h, f for each refined plan node bottom-up from root
+  for (int d = 0; d <= H_best->depth; ++d) {
+    HNode *H = refined_by_depth[d];
+    if (H == nullptr) continue;
+    if (d == 0) {
+      H->g = 0;
+    } else {
+      HNode *par = refined_by_depth[d - 1];
+      H->g = par->g + get_edge_cost(par->C, H->C, nullptr);
+    }
+    H->h = heuristic->get(H->C);
+    H->f = H->g + H->h;
+  }
+
+  // Find depth where f_refined - f_orig is maximal (only where both exist)
+  HNode *best_start = H_best;
+  int max_delta = INT_MIN;
+  int shared_depth = std::min((int)orig_by_depth.size(), (int)refined_by_depth.size()) - 1;
+  for (int d = 0; d <= shared_depth; ++d) {
+    if (orig_by_depth[d] == nullptr || refined_by_depth[d] == nullptr) continue;
+    int delta = refined_by_depth[d]->f - orig_by_depth[d]->f;
+    if (delta > max_delta) {
+      max_delta = delta;
+      best_start = refined_by_depth[d];
+    }
+  }
+
+  std::cout << "[ASHA] elapsed:" << std::setw(6) << elapsed_ms(deadline) << "ms  "
+            << "Returning H_start at depth: " << best_start->depth << ", g: " << best_start->g
+            << std::endl;  
+  return best_start;
+}
+
 
 static bool should_kill(const std::vector<Candidate>& candidates, int c)
 {
@@ -153,13 +243,35 @@ ASHA_Planner::LaCAM_Res ASHA_Planner::run_lacam(HNode* H_from, int max_iteration
     // create successors at the high-level search
     auto Q_to = Config(N, nullptr);
     for (auto d = 0; d < L->depth; ++d) Q_to[L->who[d]] = L->where[d];
-    auto res = pibt->set_new_config(H->C, Q_to, H->order);
+
+    bool pibt_res;
+    if (FLG_PREFIX_REFINEMENT) {
+      dmt->set_active_modes(&H->agent_modes);
+      auto &mutable_goals = const_cast<Config &>(ins->goals);
+      const Config orig_goals = mutable_goals;
+      for (int i = 0; i < N; ++i)
+        mutable_goals[i] = H->agent_modes[i] ? orig_goals[i] : prefix_goals[i];
+      pibt_res = pibt->set_new_config(H->C, Q_to, H->order);
+      mutable_goals = orig_goals;
+    } else {
+      pibt_res = pibt->set_new_config(H->C, Q_to, H->order);
+    }
     delete L;
 
     // failed? retry
-    if (!res) continue;
+    if (!pibt_res) continue;
 
-    if (is_same_config(Q_to, ins->goals)) {
+    // compute new modes to check success condition
+    const bool is_goal = [&]() -> bool {
+      if (!FLG_PREFIX_REFINEMENT) return is_same_config(Q_to, ins->goals);
+      // success when all agents reach their prefix goals
+      for (int i = 0; i < N; ++i) {
+        if (!H->agent_modes[i] && Q_to[i] != prefix_goals[i]) return false;
+      }
+      return true;
+    }();
+
+    if (is_goal) {
       HNode* H_new = create_highlevel_node(Q_to, H);
       if (H_goal == nullptr) H_goal = H_new;
       if (H_new->g < H_goal->g) { 
@@ -170,16 +282,19 @@ ASHA_Planner::LaCAM_Res ASHA_Planner::run_lacam(HNode* H_from, int max_iteration
         H_goal->depth = H_new->depth;
       }
       info(1, verbose, deadline, "found goal, cost: ", H_goal->g);
-      return { H, search_iter, true, true };
+      return { H_goal, search_iter, true, true };
     }
 
-    // check explored list
+    // check explored list before creating a node, to avoid overwriting EXPLORED
     auto iter = EXPLORED.find(Q_to);
-    if (iter != EXPLORED.end()) {
-      auto g = H->g + get_edge_cost(H->C, Q_to);
-      auto h = heuristic->get(Q_to);
-      auto f = g + h;
-      if (f >= iter->second->f && H_goal != nullptr) {
+    if (iter != EXPLORED.end() && !FLG_PREFIX_REFINEMENT) {
+      auto* H_existing = iter->second;
+      // compute tentative g for the path through H
+      // (create_highlevel_node would do this; replicate cheaply here)
+      auto tentative_g = H->g + get_edge_cost(H->C, Q_to,
+                                              FLG_PREFIX_REFINEMENT ? &H_existing->agent_modes : nullptr);
+      auto tentative_f = tentative_g + H_existing->h;
+      if (tentative_f >= H_existing->f && H_goal != nullptr) {
         // We found a worse (or equal) path to a known configuration.
         // Deterministically drop this branch. 
         // By continuing without pushing, OPEN.front() remains H, 
@@ -187,7 +302,7 @@ ASHA_Planner::LaCAM_Res ASHA_Planner::run_lacam(HNode* H_from, int max_iteration
         continue;
       }
       // known configuration
-      HNode* H_best = rewrite(H, iter->second);
+      HNode* H_best = rewrite(H, H_existing);
       if (H_best != nullptr) {
         // 1. Surpassed or hit the depth budget
         if (H_best->depth >= max_depth) {
@@ -208,7 +323,7 @@ ASHA_Planner::LaCAM_Res ASHA_Planner::run_lacam(HNode* H_from, int max_iteration
         H = H_best;
         continue; 
       }      
-      H = iter->second;
+      H = H_existing;
     } else {
       auto H_new = create_highlevel_node(Q_to, H);
       H = H_new;
@@ -223,10 +338,21 @@ ASHA_Planner::LaCAM_Res ASHA_Planner::run_lacam(HNode* H_from, int max_iteration
 
 HNode *ASHA_Planner::create_highlevel_node(const Config &Q, HNode *parent)
 {
-  auto g_val =
-      (parent == nullptr) ? 0 : parent->g + get_edge_cost(parent->C, Q);
-  auto h_val = heuristic->get(Q);
-  auto H_new = new HNode(Q, D, parent, g_val, h_val);
+  std::vector<bool> new_modes;
+  if (FLG_PREFIX_REFINEMENT) {
+    new_modes = parent ? parent->agent_modes : std::vector<bool>(N, false);
+    for (int i = 0; i < N; ++i)
+      if (!new_modes[i] && Q[i] == prefix_goals[i]) new_modes[i] = true;
+  }
+
+  auto g_val = (parent == nullptr)
+                   ? 0
+                   : parent->g + get_edge_cost(parent->C, Q,
+                                               FLG_PREFIX_REFINEMENT ? &new_modes : nullptr);
+  auto h_val = FLG_PREFIX_REFINEMENT ? heuristic->get(Q, &new_modes) : heuristic->get(Q);
+  auto H_new = new HNode(Q, D, parent, g_val, h_val,
+                         FLG_PREFIX_REFINEMENT ? new_modes : std::vector<bool>());
+
   EXPLORED[Q] = H_new;
   return H_new;
 }
@@ -255,7 +381,8 @@ HNode* ASHA_Planner::rewrite(HNode *H_from, HNode *H_to)
     auto n_from = Q.front();
     Q.pop();
     for (auto n_to : n_from->neighbor) {
-      auto g_val = n_from->g + get_edge_cost(n_from->C, n_to->C);
+      auto g_val = n_from->g + get_edge_cost(n_from->C, n_to->C,
+                                              FLG_PREFIX_REFINEMENT ? &n_to->agent_modes : nullptr);
       
       if (g_val < n_to->g) {
         n_to->g = g_val;
@@ -280,13 +407,14 @@ HNode* ASHA_Planner::rewrite(HNode *H_from, HNode *H_to)
   return H_best; // Could be nullptr if graph was somehow locked
 }
 
-int ASHA_Planner::get_edge_cost(const Config &C1, const Config &C2)
+int ASHA_Planner::get_edge_cost(const Config &C1, const Config &C2,
+                                const std::vector<bool> *modes)
 {
   auto cost = 0;
   for (uint i = 0; i < N; ++i) {
-    if (C1[i] != ins->goals[i] || C2[i] != ins->goals[i]) {
-      cost += 1;
-    }
+    if (modes && (*modes)[i]) continue;  // phase 2: free
+    const Vertex *goal = (modes && FLG_PREFIX_REFINEMENT) ? prefix_goals[i] : ins->goals[i];
+    if (C1[i] != goal || C2[i] != goal) cost += 1;
   }
   return cost;
 }

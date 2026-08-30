@@ -4,7 +4,8 @@
 
 int HNode::COUNT = 0;
 
-HNode::HNode(Config _C, DistTable *D, HNode *_parent, int _g, int _h)
+HNode::HNode(Config _C, DistTable *D, HNode *_parent, int _g, int _h,
+             std::vector<bool> _modes)
     : C(_C),
       parent(_parent),
       neighbor(),
@@ -14,7 +15,9 @@ HNode::HNode(Config _C, DistTable *D, HNode *_parent, int _g, int _h)
       priorities(C.size(), 0),
       order(C.size(), 0),
       search_tree(std::queue<LNode *>()),
-      depth(_parent == nullptr ? 0 : _parent->depth + 1)
+      depth(_parent == nullptr ? 0 : _parent->depth + 1),
+      agent_modes(_modes.empty() ? std::vector<bool>(C.size(), false)
+                                 : std::move(_modes))
 {
   ++COUNT;
 
@@ -34,7 +37,7 @@ HNode::HNode(Config _C, DistTable *D, HNode *_parent, int _g, int _h)
   } else {
     // dynamic priorities, akin to PIBT
     for (auto i = 0; i < N; ++i) {
-      if (D->get(i, C[i]) != 0) {
+      if (!is_at_goal(i, D)) {
         priorities[i] = parent->priorities[i] + 1;
       } else {
         priorities[i] = parent->priorities[i] - (int)parent->priorities[i];

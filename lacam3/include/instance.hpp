@@ -12,7 +12,6 @@ struct Instance {
   Config starts;  // initial configuration
   Config goals;   // goal configuration
   uint N;   // number of agents
-  bool delete_graph_after_used;
 
   Instance(Graph *_G, const Config &_starts, const Config &_goals, uint _N);
   Instance(const std::string &map_filename,

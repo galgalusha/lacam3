@@ -42,6 +42,27 @@ void DistTable::setup(const Instance *ins, bool toward_goal)
   }
 }
 
+DistTable::DistTable(int K) : K(K) {}
+
 int DistTable::get(const int i, const int v_id) { return table[i][v_id]; }
 
 int DistTable::get(const int i, const Vertex *v) { return get(i, v->id); }
+
+DoubleModeDistTable::DoubleModeDistTable(int K, DistTable *d_prefix, DistTable *d_real)
+    : DistTable(K), D_prefix(d_prefix), D_real(d_real), agent_modes(nullptr) {}
+
+void DoubleModeDistTable::set_active_modes(const std::vector<bool> *modes)
+{
+  agent_modes = modes;
+}
+
+int DoubleModeDistTable::get(const int i, const int v_id)
+{
+  if (agent_modes && (*agent_modes)[i]) return D_real->get(i, v_id);
+  return D_prefix->get(i, v_id);
+}
+
+int DoubleModeDistTable::get(const int i, const Vertex *v)
+{
+  return get(i, v->id);
+}

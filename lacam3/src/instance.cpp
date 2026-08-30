@@ -2,7 +2,6 @@
 
 Instance::~Instance()
 {
-  if (delete_graph_after_used) delete G;
 }
 
 Instance::Instance(Graph *_G, const Config &_starts, const Config &_goals,
@@ -17,8 +16,7 @@ Instance::Instance(const std::string &map_filename,
     : G(new Graph(map_filename)),
       starts(Config()),
       goals(Config()),
-      N(start_indexes.size()),
-      delete_graph_after_used(true)
+      N(start_indexes.size())
 {
   for (auto k : start_indexes) starts.push_back(G->U[k]);
   for (auto k : goal_indexes) goals.push_back(G->U[k]);
@@ -33,9 +31,8 @@ Instance::Instance(const std::string &scen_filename,
     : G(new Graph(map_filename)),
       starts(Config()),
       goals(Config()),
-      N(_N),
-      delete_graph_after_used(true)
-{
+      N(_N)
+{      
   // load start-goal pairs
   std::ifstream file(scen_filename);
   if (!file) {
@@ -72,8 +69,7 @@ Instance::Instance(const std::string &map_filename, const int _N,
     : G(new Graph(map_filename)),
       starts(Config()),
       goals(Config()),
-      N(_N),
-      delete_graph_after_used(true)
+      N(_N)
 {
   auto MT = std::mt19937(seed);
   // random assignment

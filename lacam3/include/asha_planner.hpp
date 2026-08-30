@@ -33,6 +33,11 @@ struct ASHA_Planner {
   PIBT* pibt;
   bool delete_dist_table_after_used;
 
+  // prefix refinement
+  bool FLG_PREFIX_REFINEMENT;
+  Config prefix_goals;       // intermediate goals (phase 1 targets)
+  DoubleModeDistTable *dmt;  // non-null when FLG_PREFIX_REFINEMENT is true
+
   // heuristic
   Heuristic *heuristic;
 
@@ -49,16 +54,18 @@ struct ASHA_Planner {
 
   ASHA_Planner(const Instance *_ins, int _verbose = 0,
           const Deadline *_deadline = nullptr, int _seed = 0,
-          DistTable *_D = nullptr  // used in recursive LaCAM
+          DistTable *_D = nullptr,
+          const Config *_prefix_goals = nullptr  // non-null enables prefix refinement mode
   );
   ~ASHA_Planner();
   Solution solve();
   LaCAM_Res run_lacam(HNode* H_from, int max_iterations=INT_MAX, int upper_bound=INT_MAX, int max_depth=INT_MAX);
   HNode *create_highlevel_node(const Config &Q, HNode *parent);
   HNode* rewrite(HNode *H_from, HNode *H_to);
-  int get_edge_cost(const Config &C1, const Config &C2);
+  int get_edge_cost(const Config &C1, const Config &C2, const std::vector<bool> *modes = nullptr);
   Solution backtrack(HNode *H);
   void set_scatter();
   void set_pibt();
   void logging();
+  HNode* refine_prefix(LaCAM_Res& res_init);
 };
