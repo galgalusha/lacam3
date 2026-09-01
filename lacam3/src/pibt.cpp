@@ -26,6 +26,12 @@ PIBT::PIBT(const Instance *_ins, DistTable *_D, int seed, bool _flg_swap,
       pair_distances(N*N),
       radial_neighbors(ins->G->V.size())
 {
+  if (pair_db) setup_pair_db();
+}
+
+PIBT::~PIBT() {}
+
+void PIBT::setup_pair_db() {
   const int width = ins->G->width;
   const int height = ins->G->height;
   const int r = PairWiseDB::RADIUS;
@@ -38,14 +44,13 @@ PIBT::PIBT(const Instance *_ins, DistTable *_D, int seed, bool _flg_swap,
         const int ny = u_i->y + dy;
         if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
         Vertex* u_j = ins->G->U[ny * width + nx];
-        if (u_j == nullptr || u_j == u_i) continue;
+        if (u_j == nullptr || pair_db->D->get(u_i->id, u_j->id) > r) continue;
         vec.push_back(u_j);
       }
     }
   }
 }
 
-PIBT::~PIBT() {}
 
 bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
                           const std::vector<int> &order)
@@ -109,8 +114,6 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
     double max_penalty = 0;
 
     for (Vertex* u_j : radial_neighbors[u_i->id]) {
-      if (pair_db->D->get(u_i->id, u_j->id) > PairWiseDB::RADIUS) continue;
-
       // Check for agents moving TO this cell (PART 1)
       int j = occupied_next[u_j->id];
       if (j != NO_AGENT && j != i) {
@@ -122,7 +125,12 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
       j = occupied_now[u_j->id];
       if (j != NO_AGENT && j != i) {
         if (Q_to[j] == nullptr) {
-          double wait_penalty = pair_db->get(i, j, u_i, u_j);
+          double wait_penalty = 0;
+          if (u_i == u_j) { 
+            // Special case: i is moving where an unmoved agent j is occuping now.
+            //               There is no pair_db entry for u_i==u_j
+            wait_penalty = pair_db->get(i, j, Q_from[i], u_j);
+          } else wait_penalty = pair_db->get(i, j, u_i, u_j);
           double current_penalty = wait_penalty * GAMMA;
           if (current_penalty > max_penalty) max_penalty = current_penalty;
         }

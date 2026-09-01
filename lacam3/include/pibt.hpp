@@ -50,6 +50,7 @@ struct PIBT {
        Scatter *_scatter = nullptr);
   ~PIBT();
 
+  void setup_pair_db();
   bool set_new_config(const Config &Q_from, Config &Q_to,
                       const std::vector<int> &order);
   bool set_new_config_internal(const Config &Q_from, Config &Q_to,
