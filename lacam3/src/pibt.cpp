@@ -4,7 +4,7 @@ PairWiseDB* PIBT::pair_db = nullptr;
 float PIBT::GAMMA = 0.5;
 bool PIBT::FIXED_TIE = false;
 
-const double DH_DEFINITE_WEIGHT = 0.01;
+const double DH_WEIGHT = 0.01;
 const double RANDOM_TIE_WEIGHT = 0.001;
 
 PIBT::PIBT(const Instance *_ins, DistTable *_D, int seed, bool _flg_swap,
@@ -125,20 +125,64 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
       j = occupied_now[u_j->id];
       if (j != NO_AGENT && j != i) {
         if (Q_to[j] == nullptr) {
-          double wait_penalty = 0;
+          double estimated_penalty = 0;
           if (u_i == u_j) { 
             // Special case: i is moving where an unmoved agent j is occuping now.
             //               There is no pair_db entry for u_i==u_j
-            wait_penalty = pair_db->get(i, j, Q_from[i], u_j);
-          } else wait_penalty = pair_db->get(i, j, u_i, u_j);
-          double current_penalty = wait_penalty * GAMMA;
-          if (current_penalty > max_penalty) max_penalty = current_penalty;
+            
+            //
+            // Option 1: estimate possible moves of j
+            //
+            double future_penalty = 0;
+            double penalty1 = 0;
+            double penalty2 = 0;
+            double ordinal1 = ins->G->size();
+            double ordinal2 = ins->G->size();
+            bool j_has_where_to_move = false;
+
+            for (auto u_j_maybe : Q_from[j]->neighbor) {
+              if (occupied_next[u_j_maybe->id] != NO_AGENT) continue; // vertex collision
+              int agent_k = occupied_now[u_j_maybe->id];
+              if (agent_k != NO_AGENT && Q_to[agent_k] == u_j) continue; // swap conflict
+              j_has_where_to_move = true;
+              double ordinal = D->get(j, u_j_maybe) + oracle_tie_breakers[j][u_j_maybe->id];
+              if (ordinal < ordinal1) {
+                // 1st place becomes 2nd
+                ordinal2 = ordinal1;
+                penalty2 = penalty1;
+                // winner takes 1st place
+                ordinal1 = ordinal;
+                penalty1 = pair_db->get(i, j, u_i, u_j_maybe);
+              } 
+              else if (ordinal < ordinal2) {
+                ordinal2 = ordinal;
+                penalty2 = pair_db->get(i, j, u_i, u_j_maybe);
+              }
+            }
+            // Evaluate estimation based on number of available moves
+            if (!j_has_where_to_move) {
+              future_penalty = ins->G->size() * 1000.0; // trapped
+            } else if (ordinal2 == ins->G->size()) {
+              future_penalty = penalty1; // only 1 valid move
+            } else {
+              future_penalty = penalty1 * 0.666 + penalty2 * 0.333;
+            }
+            double stationary_penalty = pair_db->get(i, j, Q_from[i], u_j);
+            estimated_penalty = (stationary_penalty * 0.666 + future_penalty * 0.333) * GAMMA;
+            //
+            // Option 2: (DISABLED) consider both i and j standing still
+            //
+            // wait_penalty = pair_db->get(i, j, Q_from[i], u_j) * GAMMA;
+          } else {
+            estimated_penalty = pair_db->get(i, j, u_i, u_j) * GAMMA;
+          }
+          if (estimated_penalty > max_penalty) max_penalty = estimated_penalty;
         }
       }
     }
 
     // Write the final maximum penalty to the pre-allocated array
-    dh_values[u_i->id] = DH_DEFINITE_WEIGHT * max_penalty;
+    dh_values[u_i->id] = DH_WEIGHT * max_penalty;
   }
 }
 
