@@ -13,10 +13,12 @@
 #include "scatter.hpp"
 #include "utils.hpp"
 #include "pair_wise_db.hpp"
+#include <unordered_map>
 
 struct PIBT {
   static PairWiseDB* pair_db;
   static float GAMMA;
+  static bool TWO_PASS_ORACLE;
 
   const Instance *ins;
   std::mt19937 MT;
@@ -31,11 +33,18 @@ struct PIBT {
   std::vector<int> occupied_now;                // for quick collision checking
   std::vector<int> occupied_next;               // for quick collision checking
   std::vector<std::array<Vertex *, 5>> C_next;  // next location candidates
-  std::vector<float> tie_breakers;              // random values, used in PIBT
-  std::vector<float> dh_values;
+  std::vector<double> tie_breakers;              // random values, used in PIBT
+  std::vector<std::unordered_map<int, double>> oracle_tie_breakers;  // per-agent recorded tie-breakers: [agent_id][vertex_id]
+  std::vector<double> dh_values;
   std::vector<int> pair_distances;
   // per-vertex candidates within RADIUS: non-null, in-bounds, Manhattan <= RADIUS
-  std::vector<std::vector<Vertex*>> spatial_neighbors;
+  std::vector<std::vector<Vertex*>> radial_neighbors;
+  int oracle_pass;
+  std::vector<int> oracle_occupied_next;
+  Config oracle_Q_to;
+
+  std::vector<int> count_oracle_guessed_right;
+  std::vector<int> count_oracle_guessed_wrong;
 
   // swap, used in the LaCAM* paper
   bool flg_swap;
@@ -49,6 +58,8 @@ struct PIBT {
 
   bool set_new_config(const Config &Q_from, Config &Q_to,
                       const std::vector<int> &order);
+  bool set_new_config_internal(const Config &Q_from, Config &Q_to,
+                      const std::vector<int> &order);
   bool funcPIBT(const int i, const Config &Q_from, Config &Q_to);
   int is_swap_required_and_possible(const int ai, const Config &Q_from,
                                     Config &Q_to);
@@ -57,6 +68,8 @@ struct PIBT {
   bool is_swap_possible(Vertex *v_pusher_origin, Vertex *v_puller_origin);
 
   void fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to, const int start = 0);
+
+  void fill_dh_values_with_oracle(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to, const int start = 0);
 
   inline int pair_key(int i, int j) { 
     int lo = std::min(i, j), hi = std::max(i, j);

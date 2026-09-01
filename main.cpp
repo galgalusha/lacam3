@@ -44,6 +44,10 @@ int main(int argc, char *argv[])
       .help("turn off all options, i.e., vanilla LaCAM")
       .default_value(false)
       .implicit_value(true);
+  program.add_argument("--two-pass-oracle")
+      .help("Run PIBT twice for every step using the 1st pass as an oracle")
+      .default_value(false)
+      .implicit_value(true);
   program.add_argument("--no-star")
       .help("turn off the anytime part, i.e., usual LaCAM")
       .default_value(false)
@@ -123,6 +127,7 @@ int main(int argc, char *argv[])
   const auto test_pair_db = program.get<bool>("pair-db-test");
   const auto gen_pair_db = program.get<bool>("pair-db-gen");
   const auto asha_planner = program.get<bool>("asha");
+  const auto two_pass_oracle = program.get<bool>("two-pass-oracle");
   const auto use_pair_db = program.get<bool>("pair-db");
   if (use_pair_db && (map_name.size() < 4 || map_name.substr(map_name.size() - 4) != ".map")) {
     std::cerr << "error: map file must have a .map extension to use --pair-db" << std::endl;
@@ -187,6 +192,9 @@ int main(int argc, char *argv[])
     std::cout << "\nDone. You can delete the bin files and leave only the bin2 files." << std::endl;
     exit(0);
   }
+
+  PIBT::TWO_PASS_ORACLE = two_pass_oracle;
+  if (two_pass_oracle) std::cout << "PIBT::TWO_PASS_ORACLE=true" << std::endl;
 
   if (test_pair_db) {
     PairWiseDB pair_db(ins.G, pair_db_name);
