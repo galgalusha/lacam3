@@ -2,7 +2,7 @@
 
 PairWiseDB* PIBT::pair_db = nullptr;
 float PIBT::GAMMA = 0.5;
-bool PIBT::TWO_PASS_ORACLE = false;
+bool PIBT::FIXED_TIE = false;
 
 const double DH_DEFINITE_WEIGHT = 0.01;
 const double RANDOM_TIE_WEIGHT = 0.001;
@@ -24,14 +24,8 @@ PIBT::PIBT(const Instance *_ins, DistTable *_D, int seed, bool _flg_swap,
       flg_swap(_flg_swap),
       scatter(_scatter),
       pair_distances(N*N),
-      radial_neighbors(ins->G->V.size()),
-      oracle_occupied_next(V_size, NO_AGENT)
+      radial_neighbors(ins->G->V.size())
 {
-  for (int x = 0; x < 10; x++) {
-    count_oracle_guessed_right.push_back(0);
-    count_oracle_guessed_wrong.push_back(0);
-  }
-
   const int width = ins->G->width;
   const int height = ins->G->height;
   const int r = PairWiseDB::RADIUS;
@@ -54,23 +48,6 @@ PIBT::PIBT(const Instance *_ins, DistTable *_D, int seed, bool _flg_swap,
 PIBT::~PIBT() {}
 
 bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
-                          const std::vector<int> &order)
-{
-  if (!TWO_PASS_ORACLE)
-    return set_new_config_internal(Q_from, Q_to, order);
-
-  const Config Q_to_orig = Q_to;
-  oracle_pass = 0;
-  if (!set_new_config_internal(Q_from, Q_to, order)) return false;
-
-  oracle_pass++;
-  Q_to = Q_to_orig;
-  if (!set_new_config_internal(Q_from, Q_to, order)) return false;
-
-  return true;
-}
-
-bool PIBT::set_new_config_internal(const Config &Q_from, Config &Q_to,
                           const std::vector<int> &order)
 {
   bool success = true;
@@ -97,6 +74,16 @@ bool PIBT::set_new_config_internal(const Config &Q_from, Config &Q_to,
     }
   }
 
+  if (FIXED_TIE) {
+    for (auto i = 0; i < N; i++) {
+      auto neighbors = Q_from[i]->neighbor;
+      oracle_tie_breakers[i].clear();
+      for (Vertex* u : neighbors) {
+        oracle_tie_breakers[i][u->id] = RANDOM_TIE_WEIGHT * get_random_float(MT);
+      }      
+    }
+  }
+
   if (success) {
     for (auto i : order) {
       if (Q_to[i] == nullptr && !funcPIBT(i, Q_from, Q_to)) {
@@ -104,21 +91,6 @@ bool PIBT::set_new_config_internal(const Config &Q_from, Config &Q_to,
         break;
       }
     }
-  }
-
-  // score oracle predictions from the previous pass
-  if (TWO_PASS_ORACLE && oracle_pass > 0) {
-    for (int v = 0; v < V_size; ++v) {
-      if (oracle_occupied_next[v] == NO_AGENT) continue;
-      if (occupied_next[v] == oracle_occupied_next[v]) ++count_oracle_guessed_right[oracle_pass];
-      else                               ++count_oracle_guessed_wrong[oracle_pass];
-    }
-  }
-
-  // capture oracle snapshot before cleanup (used by second pass)
-  if (TWO_PASS_ORACLE) {
-    oracle_occupied_next = occupied_next;
-    oracle_Q_to = Q_to;
   }
 
   // cleanup
@@ -132,9 +104,6 @@ bool PIBT::set_new_config_internal(const Config &Q_from, Config &Q_to,
 
 void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to, const int start)
 {
-  bool has_oracle = TWO_PASS_ORACLE && oracle_pass > 0;
-  if (has_oracle) return fill_dh_values_with_oracle(i, neighbors, num_neighbors, Q_from, Q_to, start);
-
   for (int k = start; k < num_neighbors; ++k) {
     Vertex* u_i = neighbors[k];
     double max_penalty = 0;
@@ -165,42 +134,6 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
   }
 }
 
-void PIBT::fill_dh_values_with_oracle(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to, const int start)
-{
-  for (int k = start; k < num_neighbors; ++k) {
-    Vertex* u_i = neighbors[k];
-    double max_penalty = 0;
-
-    auto my_radial_neighbors = radial_neighbors[u_i->id];
-    for (Vertex* u_j : my_radial_neighbors) {
-      if (pair_db->D->get(u_i->id, u_j->id) > PairWiseDB::RADIUS) continue;
-      double discount = 1.0;
-
-      // Check for agents moving TO this cell (PART 1)
-      int j = occupied_next[u_j->id];
-      if (j == NO_AGENT) { j = oracle_occupied_next[u_j->id]; discount = 0.9; }
-      if (j != NO_AGENT && j != i) {
-        double current_penalty = pair_db->get(i, j, u_i, u_j) * discount;
-        if (current_penalty > max_penalty) max_penalty = current_penalty;
-      }
-
-      // Check for agents CURRENTLY AT this cell
-      j = occupied_now[u_j->id];
-      if (j != NO_AGENT && j != i) {
-        Vertex* j_to = Q_to[j];
-        if (j_to == nullptr) {
-          double wait_penalty = pair_db->get(i, j, u_i, u_j);
-          double current_penalty = wait_penalty * GAMMA;
-          if (current_penalty > max_penalty) max_penalty = current_penalty;
-        }
-      }
-    }
-
-    // Write the final maximum penalty to the pre-allocated array
-    dh_values[u_i->id] = DH_DEFINITE_WEIGHT * max_penalty;
-  }
-}
-
 bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
 {
   const auto K = Q_from[i]->neighbor.size();
@@ -216,15 +149,11 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
   }
 
   // set C_next
-  const bool use_recorded_tb = TWO_PASS_ORACLE && oracle_pass == 1;
   auto get_tb = [&](Vertex* v) -> double {
-    if (use_recorded_tb) {
-      auto it = oracle_tie_breakers[i].find(v->id);
-      return it != oracle_tie_breakers[i].end() ? it->second : 0.0;
-    }
+    if (FIXED_TIE) 
+      return (v == Q_from[i]) ? 0 : oracle_tie_breakers[i][v->id];
     double tb = RANDOM_TIE_WEIGHT * get_random_float(MT);
     tie_breakers[v->id] = tb;
-    if (TWO_PASS_ORACLE) oracle_tie_breakers[i][v->id] = tb;
     return tb;
   };
   for (size_t k = 0; k < K; ++k) {

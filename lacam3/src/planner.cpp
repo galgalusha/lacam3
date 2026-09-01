@@ -90,13 +90,6 @@ Solution Planner::solve()
     HNode *restart_node = restarter->get_node_for_restart(H, H_goal);
     OPEN.push_front(restart_node);
     info(0, 1, deadline, "\tRestart at iteration: ", search_iter, "\tat depth: ", H->depth, "\tto depth: ", restart_node->depth, "\t", reason);
-    for (int oi = 0; oi < 10; ++oi) {
-      int right = 0, wrong = 0;
-      for (auto &p : pibts) { right += p->count_oracle_guessed_right[oi]; wrong += p->count_oracle_guessed_wrong[oi]; }
-      if (right == 0 && wrong == 0) continue;
-      double pct = 100.0 * right / (right + wrong);
-      info(0, 1, deadline, "\tOracle[", oi, "] right=", right, " wrong=", wrong, " (", pct, "%)");
-    }
   };  
 
   // search loop
