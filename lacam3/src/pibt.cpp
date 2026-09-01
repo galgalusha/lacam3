@@ -6,6 +6,7 @@ bool PIBT::FIXED_TIE = false;
 
 const double DH_WEIGHT = 0.01;
 const double RANDOM_TIE_WEIGHT = 0.001;
+const double TRAPPED_PENALTY = INT_MAX;
 
 PIBT::PIBT(const Instance *_ins, DistTable *_D, int seed, bool _flg_swap,
            Scatter *_scatter)
@@ -107,6 +108,60 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
   return success;
 }
 
+double PIBT::get_future_penalty(const int i, const int j, Vertex* u_i, Vertex* u_j, const Config& Q_from, const Config& Q_to)
+{
+  double penalty1 = 0;
+  double penalty2 = 0;
+  double ordinal1 = ins->G->size();
+  double ordinal2 = ins->G->size();
+  bool j_cant_move = true;
+
+  for (auto u_j_maybe : Q_from[j]->neighbor) {
+    //
+    // filter conflicting maybes
+    // 
+
+    // 1. Vertex collision with i: j cannot move to the cell i is claiming
+    if (u_j_maybe == u_i) continue; 
+    // 2. True Swap Conflict: only applies if they are exchanging places
+    if (u_i == u_j && u_j_maybe == Q_from[i]) continue; 
+    // vertex collision
+    if (occupied_next[u_j_maybe->id] != NO_AGENT) continue; 
+    // swap conflict with agent k
+    int agent_k = occupied_now[u_j_maybe->id];
+    if (agent_k != NO_AGENT && Q_to[agent_k] == u_j) continue; 
+    j_cant_move = false;
+
+    //
+    // check penality of u_j_maybe 
+    //
+    double ordinal = D->get(j, u_j_maybe) + oracle_tie_breakers[j][u_j_maybe->id];
+    if (ordinal < ordinal1) {
+      // 1st place becomes 2nd
+      ordinal2 = ordinal1;
+      penalty2 = penalty1;
+      // winner takes 1st place
+      ordinal1 = ordinal;
+      penalty1 = pair_db->get(i, j, u_i, u_j_maybe);
+    }
+    else if (ordinal < ordinal2) {
+      ordinal2 = ordinal;
+      penalty2 = pair_db->get(i, j, u_i, u_j_maybe);
+    }
+  }
+
+  if (j_cant_move) {
+    if (u_i == u_j) {
+      return TRAPPED_PENALTY; // Fatal: j must move but can't
+    } else {
+      // Safe: j is not forced to move, so its future state is just standing still
+      return pair_db->get(i, j, u_i, u_j); 
+    }
+  }  
+  if (ordinal2 == ins->G->size()) return penalty1; // only 1 valid move
+  return penalty1 * 0.7 + penalty2 * 0.3;
+}
+
 void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to, const int start)
 {
   for (int k = start; k < num_neighbors; ++k) {
@@ -123,61 +178,17 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
 
       // Check for agents CURRENTLY AT this cell (PART 2)
       j = occupied_now[u_j->id];
-      if (j != NO_AGENT && j != i) {
-        if (Q_to[j] == nullptr) {
-          double estimated_penalty = 0;
-          if (u_i == u_j) { 
-            // Special case: i is moving where an unmoved agent j is occuping now.
-            //               There is no pair_db entry for u_i==u_j
-            
-            //
-            // Option 1: estimate possible moves of j
-            //
-            double future_penalty = 0;
-            double penalty1 = 0;
-            double penalty2 = 0;
-            double ordinal1 = ins->G->size();
-            double ordinal2 = ins->G->size();
-            bool j_has_where_to_move = false;
-
-            for (auto u_j_maybe : Q_from[j]->neighbor) {
-              if (occupied_next[u_j_maybe->id] != NO_AGENT) continue; // vertex collision
-              int agent_k = occupied_now[u_j_maybe->id];
-              if (agent_k != NO_AGENT && Q_to[agent_k] == u_j) continue; // swap conflict
-              j_has_where_to_move = true;
-              double ordinal = D->get(j, u_j_maybe) + oracle_tie_breakers[j][u_j_maybe->id];
-              if (ordinal < ordinal1) {
-                // 1st place becomes 2nd
-                ordinal2 = ordinal1;
-                penalty2 = penalty1;
-                // winner takes 1st place
-                ordinal1 = ordinal;
-                penalty1 = pair_db->get(i, j, u_i, u_j_maybe);
-              } 
-              else if (ordinal < ordinal2) {
-                ordinal2 = ordinal;
-                penalty2 = pair_db->get(i, j, u_i, u_j_maybe);
-              }
-            }
-            // Evaluate estimation based on number of available moves
-            if (!j_has_where_to_move) {
-              future_penalty = ins->G->size() * 1000.0; // trapped
-            } else if (ordinal2 == ins->G->size()) {
-              future_penalty = penalty1; // only 1 valid move
-            } else {
-              future_penalty = penalty1 * 0.666 + penalty2 * 0.333;
-            }
-            double stationary_penalty = pair_db->get(i, j, Q_from[i], u_j);
-            estimated_penalty = (stationary_penalty * 0.666 + future_penalty * 0.333) * GAMMA;
-            //
-            // Option 2: (DISABLED) consider both i and j standing still
-            //
-            // wait_penalty = pair_db->get(i, j, Q_from[i], u_j) * GAMMA;
-          } else {
-            estimated_penalty = pair_db->get(i, j, u_i, u_j) * GAMMA;
-          }
-          if (estimated_penalty > max_penalty) max_penalty = estimated_penalty;
+      if (j != NO_AGENT && j != i && Q_to[j] == nullptr) {
+        double future_penalty = get_future_penalty(i, j, u_i, u_j, Q_from, Q_to);
+        if (future_penalty == TRAPPED_PENALTY) { 
+          max_penalty = future_penalty; 
+          continue; 
         }
+        double base_penalty = u_i == u_j
+                ? pair_db->get(i, j, Q_from[i], u_j)
+                : pair_db->get(i, j, u_i, u_j);
+        double expected_penalty = (base_penalty * 0.7 + future_penalty * 0.3) * GAMMA;
+        if (expected_penalty > max_penalty) max_penalty = expected_penalty;
       }
     }
 

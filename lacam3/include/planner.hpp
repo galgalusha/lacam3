@@ -73,8 +73,7 @@ struct Planner {
                         // generator
   static bool FLG_REFINER;  // whether to use refiners
   static int REFINER_NUM;   // number of refiners
-  static bool
-      FLG_SCATTER;  // whether to use space utilization optimization (SUO)
+  static bool FLG_SCATTER;  // whether to use space utilization optimization (SUO)
   static float RANDOM_INSERT_PROB1;  // inserting the start node
   static float RANDOM_INSERT_PROB2;  // inserting a node after finding the goal
   static bool FLG_RANDOM_INSERT_INIT_NODE;
