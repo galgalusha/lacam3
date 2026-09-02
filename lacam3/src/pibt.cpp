@@ -1,12 +1,25 @@
 #include "../include/pibt.hpp"
 
 PairWiseDB* PIBT::pair_db = nullptr;
-float PIBT::GAMMA = 0.5;
 bool PIBT::FIXED_TIE = false;
 
-const double DH_WEIGHT = 0.01;
+const double DH_WEIGHT = 0.1;
 const double RANDOM_TIE_WEIGHT = 0.001;
 const double TRAPPED_PENALTY = INT_MAX;
+
+const double WEIGHT_PRIORITIZED = 2.50;
+const double WEIGHT_GOOD_MOVE   = 2.00;
+const double WEIGHT_WAIT        = 1.50;
+const double WEIGHT_BAD_MOVE    = 1.00;
+
+// avg SoC=76.3 with gamma^2 and these params
+// const double WEIGHT_PRIORITIZED = 2.50;
+// const double WEIGHT_GOOD_MOVE   = 2.00;
+// const double WEIGHT_WAIT        = 1.50;
+// const double WEIGHT_BAD_MOVE    = 1.00;
+
+const double BASE_DISCOUNT      = 0.50;
+
 
 PIBT::PIBT(const Instance *_ins, DistTable *_D, int seed, bool _flg_swap,
            Scatter *_scatter)
@@ -108,13 +121,21 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
   return success;
 }
 
-double PIBT::get_future_penalty(const int i, const int j, Vertex* u_i, Vertex* u_j, const Config& Q_from, const Config& Q_to)
+std::pair<double, double> PIBT::get_future_penalty(const int i, const int j, Vertex* u_i, Vertex* u_j, const Config& Q_from, const Config& Q_to)
 {
-  double penalty1 = 0;
-  double penalty2 = 0;
-  double ordinal1 = ins->G->size();
-  double ordinal2 = ins->G->size();
-  bool j_cant_move = true;
+  double total_weight = 0;
+  double expected_penalty_sum = 0;
+  double expected_sq_penalty_sum = 0;
+  int D_wait = D->get(j, u_j);
+
+  // Scatter
+  Vertex *j_prioritized = nullptr;
+  if (scatter != nullptr) {
+    auto itr_s = scatter->scatter_data[i].find(Q_from[i]->id);
+    if (itr_s != scatter->scatter_data[i].end()) {
+      j_prioritized = itr_s->second;
+    }
+  }
 
   for (auto u_j_maybe : Q_from[j]->neighbor) {
     //
@@ -130,36 +151,48 @@ double PIBT::get_future_penalty(const int i, const int j, Vertex* u_i, Vertex* u
     // swap conflict with agent k
     int agent_k = occupied_now[u_j_maybe->id];
     if (agent_k != NO_AGENT && Q_to[agent_k] == u_j) continue; 
-    j_cant_move = false;
 
-    //
-    // check penality of u_j_maybe 
-    //
-    double ordinal = D->get(j, u_j_maybe) + oracle_tie_breakers[j][u_j_maybe->id];
-    if (ordinal < ordinal1) {
-      // 1st place becomes 2nd
-      ordinal2 = ordinal1;
-      penalty2 = penalty1;
-      // winner takes 1st place
-      ordinal1 = ordinal;
-      penalty1 = pair_db->get(i, j, u_i, u_j_maybe);
+    // --- CONSERVATIVE WEIGHT LOGIC ---
+    double weight = WEIGHT_BAD_MOVE;
+    
+    double dh = pair_db->get(i, j, u_i, u_j_maybe);
+    int D_maybe = D->get(j, u_j_maybe);
+
+    if (u_j_maybe == j_prioritized) {
+      weight = WEIGHT_PRIORITIZED;    
+    } else if (D_maybe < D_wait) {
+      weight = WEIGHT_GOOD_MOVE;      
     }
-    else if (ordinal < ordinal2) {
-      ordinal2 = ordinal;
-      penalty2 = pair_db->get(i, j, u_i, u_j_maybe);
-    }
+    
+    total_weight += weight;
+    expected_penalty_sum += (weight * dh);
+    expected_sq_penalty_sum += (weight * dh * dh);
   }
 
-  if (j_cant_move) {
-    if (u_i == u_j) {
-      return TRAPPED_PENALTY; // Fatal: j must move but can't
-    } else {
-      // Safe: j is not forced to move, so its future state is just standing still
-      return pair_db->get(i, j, u_i, u_j); 
-    }
-  }  
-  if (ordinal2 == ins->G->size()) return penalty1; // only 1 valid move
-  return penalty1 * 0.7 + penalty2 * 0.3;
+  // j is forced to wait
+  if (total_weight == 0) {
+    if (u_i == u_j) return {TRAPPED_PENALTY, 1.0}; 
+    return {pair_db->get(i, j, u_i, u_j), 1.0};    
+  }
+
+  // add the wait "move" if possible (if agent i is not pushing agent j)
+  if (u_i != u_j && occupied_next[u_j->id] == NO_AGENT) {
+    double dh = pair_db->get(i, j, u_i, u_j);
+    double weight = WEIGHT_WAIT;
+    total_weight += weight;
+    expected_penalty_sum += (weight * dh);
+    expected_sq_penalty_sum += (weight * dh * dh);
+  }
+
+  // Mean and Variance
+  double future_dh = expected_penalty_sum / total_weight;
+  double mean_sq = expected_sq_penalty_sum / total_weight;
+  double variance = mean_sq - (future_dh * future_dh);
+  if (variance < 0) variance = 0;  
+ 
+  // Dynamic Gamma
+  double gamma = 1.0 / (1.0 + variance);
+  return {future_dh, gamma};
 }
 
 void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to, const int start)
@@ -179,15 +212,22 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
       // Check for agents CURRENTLY AT this cell (PART 2)
       j = occupied_now[u_j->id];
       if (j != NO_AGENT && j != i && Q_to[j] == nullptr) {
-        double future_penalty = get_future_penalty(i, j, u_i, u_j, Q_from, Q_to);
-        if (future_penalty == TRAPPED_PENALTY) { 
-          max_penalty = future_penalty; 
+        auto [future_dh, gamma] = get_future_penalty(i, j, u_i, u_j, Q_from, Q_to);
+        if (future_dh >= TRAPPED_PENALTY) { 
+          max_penalty = future_dh; 
           continue; 
         }
-        double base_penalty = u_i == u_j
+        double base_penalty = (u_i == u_j)
                 ? pair_db->get(i, j, Q_from[i], u_j)
-                : pair_db->get(i, j, u_i, u_j);
-        double expected_penalty = (base_penalty * 0.7 + future_penalty * 0.3) * GAMMA;
+                : pair_db->get(i, j, u_i      , u_j);  
+
+        if (u_i != u_j) gamma *= gamma;
+
+        double expected_penalty = (base_penalty * BASE_DISCOUNT * (1.0 - gamma)) + (future_dh * gamma);
+        // double expected_penalty = gamma > threshold
+        //        ? future_dh * gamma
+        //        : base_penalty * BASE_DISCOUNT;
+
         if (expected_penalty > max_penalty) max_penalty = expected_penalty;
       }
     }
@@ -200,7 +240,6 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
 bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
 {
   const auto K = Q_from[i]->neighbor.size();
-
 
   // exploit scatter data
   Vertex *prioritized_vertex = nullptr;
@@ -273,11 +312,13 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
       fill_dh_values(i, C_next[i], K + 1, Q_from, Q_to, k);
       
       std::sort(C_next[i].begin() + k, C_next[i].begin() + K + 1,
-              [&](Vertex *const v, Vertex *const u_sort) {
+              [&](Vertex *const v, Vertex *const u) {
                 if (v == prioritized_vertex) return true;
-                if (u_sort == prioritized_vertex) return false;
-                return D->get(i, v) + tie_breakers[v->id] + dh_values[v->id] <
-                       D->get(i, u_sort) + tie_breakers[u_sort->id] + dh_values[u_sort->id];
+                if (u == prioritized_vertex) return false;
+                double hv = D->get(i, v) + dh_values[v->id];
+                double hu = D->get(i, u) + dh_values[u->id];
+                if (hv != hu) return hv < hu;
+                return tie_breakers[v->id] < tie_breakers[u->id];
               });
       
       dh_filled = true;
