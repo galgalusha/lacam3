@@ -1,5 +1,7 @@
 #include "../include/pibt.hpp"
 
+#include <cmath>
+
 PairWiseDB* PIBT::pair_db = nullptr;
 bool PIBT::FIXED_TIE = false;
 
@@ -19,6 +21,8 @@ static const double RADIUS_DECAY[] = {
     0.5,                // r = 3
     0.25,               // r = 4
 };
+
+const double RISK_NUM_TO_PROB[6] = { 1.0, 0.8, 0.6, 0.4, 0.2, 0.0 };
 
 // avg SoC=76.3 with gamma^2 and these params
 // const double WEIGHT_PRIORITIZED = 2.50;
@@ -51,7 +55,9 @@ PIBT::PIBT(const Instance *_ins, DistTable *_D, int seed, bool _flg_swap,
   if (pair_db) setup_pair_db();
 }
 
-PIBT::~PIBT() {}
+PIBT::~PIBT() {
+  if (pair_db != nullptr) print_dh_error_buckets();
+}
 
 void PIBT::setup_pair_db() {
   const int width = ins->G->width;
@@ -79,6 +85,7 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
 {
   bool success = true;
   pair_distances.assign(N * N,  -1);
+  dh_prediction_cache.clear();
   // setup cache & constraints check
   for (auto i = 0; i < N; ++i) {
     // set occupied now
@@ -120,6 +127,8 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
     }
   }
 
+  if (success) evaluate_dh_predictions(Q_to);
+
   // cleanup
   for (auto i = 0; i < N; ++i) {
     occupied_now[Q_from[i]->id] = NO_AGENT;
@@ -129,94 +138,103 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
   return success;
 }
 
-bool PIBT::is_move_at_risk(int j, Vertex* u_j, const Config& Q_to) {
+int PIBT::get_move_risk(int j, Vertex* u_j, const Config& Q_to, int agent_i) {
+  int risk = 0;
+  
+  // Check the cell itself
   int k = occupied_now[u_j->id];
-  if (k != NO_AGENT && k != j && Q_to[k] == nullptr) return true;
+  if (k != NO_AGENT && k != j && k != agent_i && Q_to[k] == nullptr) risk++; 
+  
+  // Check neighbors
   for (auto u_k : u_j->neighbor) {
-    int k = occupied_now[u_k->id];
-    if (k != NO_AGENT && k != j && Q_to[k] == nullptr) return true;
+    k = occupied_now[u_k->id];
+    if (k != NO_AGENT && k != j && k != agent_i && Q_to[k] == nullptr) risk++;
   }
-  return false;
+  return risk;
 }
 
-std::pair<double, double> PIBT::get_future_penalty(const int i, const int j, Vertex* u_i, Vertex* u_j, const Config& Q_from, const Config& Q_to)
+double PIBT::get_future_penalty(const int agent_i, const int j, Vertex* u_i, Vertex* u_j, const Config& Q_from, const Config& Q_to)
 {
   // Scatter
   Vertex *j_scatter = nullptr;
   if (scatter != nullptr) {
-    auto itr_s = scatter->scatter_data[i].find(Q_from[i]->id);
-    if (itr_s != scatter->scatter_data[i].end()) {
+    auto itr_s = scatter->scatter_data[j].find(Q_from[j]->id);
+    if (itr_s != scatter->scatter_data[j].end()) {
       j_scatter = itr_s->second;
     }
   }
 
-  int D_wait = D->get(j, u_j);
-  int min_dh = INT_MAX;
-  Vertex *u_good1 = nullptr, *u_good2 = nullptr, *u_good3 = nullptr;
-  int dh_good1 = INT_MAX, dh_good2 = INT_MAX, dh_good3 = INT_MAX;
-  bool has_valid_move = false;
-  bool any_maybe_outside_the_radius = false;
+  int K = 0; // num of neighbors
+
+  // wait is possible if agent j is not pushed by agent i
+  if (u_i != u_j) C_next[j][K++] = u_j;
 
   for (auto u_j_maybe : Q_from[j]->neighbor) {
     ///
-    /// filter conflicting maybes
+    /// filtering invalid moves
     /// 
     // 1. Vertex collision with i: j cannot move to the cell i is claiming
     if (u_j_maybe == u_i) continue; 
     // 2. True Swap Conflict: only applies if they are exchanging places
-    if (u_i == u_j && u_j_maybe == Q_from[i]) continue; 
+    if (u_i == u_j && u_j_maybe == Q_from[agent_i]) continue; 
     // vertex collision
     if (occupied_next[u_j_maybe->id] != NO_AGENT) continue; 
     // swap conflict with agent k
     int agent_k = occupied_now[u_j_maybe->id];
     if (agent_k != NO_AGENT && Q_to[agent_k] == u_j) continue; 
-
-    if (u_j_maybe == j_scatter && !is_move_at_risk(j, u_j_maybe, Q_to))
-      return { pair_db->get(i, j, u_i, u_j_maybe), 1.0 };
-
-    int D_maybe = D->get(j, u_j_maybe);
-    bool is_good = D_maybe < D_wait;
-    int dh = pair_db->get(i, j, u_i, u_j_maybe);
-
-    if (is_good) {
-      if      (u_good1 == nullptr) { u_good1 = u_j_maybe; dh_good1 = dh; }
-      else if (u_good2 == nullptr) { u_good2 = u_j_maybe; dh_good2 = dh; }
-      else if (u_good3 == nullptr) { u_good3 = u_j_maybe; dh_good3 = dh; }
-    }
-
-    min_dh = std::min(min_dh, dh);
-    has_valid_move = true;
+    ///
+    /// the move is valid
+    ///
+    C_next[j][K++] = u_j_maybe;
   }
 
   // j is forced to wait
-  if (!has_valid_move) {
-    if (u_i == u_j) return {TRAPPED_PENALTY, 1.0}; 
-    return {pair_db->get(i, j, u_i, u_j), 1.0};    
+  if (K == 0) {
+    return TRAPPED_PENALTY;
   }
 
-  bool is_any_good_move_safe = 
-    (u_good1 != nullptr && !is_move_at_risk(j, u_good1, Q_to)) || 
-    (u_good2 != nullptr && !is_move_at_risk(j, u_good2, Q_to)) || 
-    (u_good3 != nullptr && !is_move_at_risk(j, u_good3, Q_to));
-
-  if (is_any_good_move_safe) {
-    int dh = std::min(dh_good1, std::min(dh_good2, dh_good3));
-    return { dh, 1.0 };
+  if (K == 1) {
+    return pair_db->get(agent_i, j, u_i, C_next[j][0]);    
   }
 
-  int wait_penalty = (u_i == u_j)
-          ? pair_db->get(i, j, Q_from[i], u_j)
-          : pair_db->get(i, j, u_i      , u_j);
+  std::sort(C_next[j].begin(), C_next[j].begin() + K,
+            [&](Vertex *const v, Vertex *const u) {
+              if (v == j_scatter) return true;
+              if (u == j_scatter) return false;
+              return D->get(j, v) + oracle_tie_breakers[j][v->id] <
+                     D->get(j, u) + oracle_tie_breakers[j][u->id];
+            });
 
-  if (wait_penalty <= min_dh) 
-    return { min_dh, 1.0 };
+  double expected_penalty = 0.0;
+  double remaining_prob = 1.0;  
 
-  double discounted_wait = wait_penalty * BASE_DISCOUNT;    
+  for (int v_idx = 0; v_idx < K; v_idx++) {
+    Vertex* v = C_next[j][v_idx];
+    // Calculate risk
+    int risk = get_move_risk(j, v, Q_to, agent_i); 
+    double success_rate = RISK_NUM_TO_PROB[std::min(risk, 5)];
+    
+    // Actual probability of ending up here
+    double p_v = remaining_prob * success_rate;
+    
+    // Add to expected penalty
+    if (p_v > 0) {
+        expected_penalty += p_v * pair_db->get(agent_i, j, u_i, v);
+        remaining_prob -= p_v;
+    }
+    
+    // Early exit if we've exhausted all probability
+    if (remaining_prob <= 0.01) break; 
+  }
 
-  if (discounted_wait <= min_dh) {
-    return { min_dh, 1.0 };
+  if (remaining_prob > 0.01) {
+      if (u_i == u_j) {
+          expected_penalty += BASE_DISCOUNT * remaining_prob * pair_db->get(agent_i, j, Q_from[agent_i], u_j);
+      } else {
+          expected_penalty += BASE_DISCOUNT * remaining_prob * pair_db->get(agent_i, j, u_i, u_j);
+      }
   }  
-  return { wait_penalty, BASE_DISCOUNT };
+  return expected_penalty;           
 }
 
 void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to, const int start)
@@ -240,12 +258,25 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
 
       // Check for agents CURRENTLY AT this cell (PART 2)
       j = occupied_now[u_j->id];
-      // int smaller_radius = PairWiseDB::RADIUS - 1;
       if (j != NO_AGENT && j != i && Q_to[j] == nullptr) {
-        int wait_penalty = (u_i == u_j)
-                ? pair_db->get(i, j, Q_from[i], u_j)
-                : pair_db->get(i, j, u_i      , u_j);
-        double expected_penalty = r_scale * wait_penalty * BASE_DISCOUNT;       
+        double expected_penalty;
+        auto& rec = dh_prediction_cache[dh_cache_key(i, j)][k];
+        rec.u_i = u_i;
+        if (r == 1) {
+          expected_penalty = get_future_penalty(i, j, u_i, u_j, Q_from, Q_to);
+          int wait_penalty = (u_i == u_j)
+                  ? pair_db->get(i, j, Q_from[i], u_j)
+                  : pair_db->get(i, j, u_i      , u_j);
+          rec.has_future = true;
+          rec.future_dh = expected_penalty;
+          rec.has_wait = true;
+          rec.wait_dh = wait_penalty;
+        } else {
+          int wait_penalty = (u_i == u_j)
+                  ? pair_db->get(i, j, Q_from[i], u_j)
+                  : pair_db->get(i, j, u_i      , u_j);
+          expected_penalty = r_scale * wait_penalty * BASE_DISCOUNT;
+        }
         if (expected_penalty > max_penalty) max_penalty = expected_penalty;
         total_penalty += expected_penalty;
       }
@@ -370,6 +401,58 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
   occupied_next[Q_from[i]->id] = i;
   Q_to[i] = Q_from[i];
   return false;
+}
+
+void PIBT::evaluate_dh_predictions(const Config &Q_to)
+{
+  static const double FUTURE_BUCKET_EDGES[] = {0.25, 0.5, 1.0, 2.0, 3.0, 4.0,
+                                                5.0,  6.0, 7.0, 8.0, 9.0, 10.0};
+  constexpr int NUM_EDGES = sizeof(FUTURE_BUCKET_EDGES) / sizeof(FUTURE_BUCKET_EDGES[0]);
+
+  for (auto &kv : dh_prediction_cache) {
+    const int i = (int)(kv.first / N);
+    const int j = (int)(kv.first % N);
+    for (auto &rec : kv.second) {
+      if (rec.u_i == nullptr || rec.u_i != Q_to[i]) continue;
+      const double actual = pair_db->get(i, j, Q_to[i], Q_to[j]);
+
+      if (rec.has_future) {
+        const double err = std::abs(actual - rec.future_dh);
+        int b = NUM_EDGES;  // overflow bucket (>= 10)
+        for (int e = 0; e < NUM_EDGES; ++e) {
+          if (err < FUTURE_BUCKET_EDGES[e]) { b = e; break; }
+        }
+        future_error_buckets[b]++;
+      }
+
+      if (rec.has_wait) {
+        const int err = std::abs((int)actual - rec.wait_dh);
+        const int b = (err <= 10) ? err : NUM_WAIT_ERROR_BUCKETS - 1;
+        wait_error_buckets[b]++;
+      }
+    }
+  }
+}
+
+void PIBT::print_dh_error_buckets()
+{
+  static const double FUTURE_BUCKET_EDGES[] = {0.0,  0.25, 0.5, 1.0, 2.0, 3.0, 4.0,
+                                                5.0,  6.0,  7.0, 8.0, 9.0, 10.0};
+  constexpr int NUM_EDGES = sizeof(FUTURE_BUCKET_EDGES) / sizeof(FUTURE_BUCKET_EDGES[0]);
+
+  std::cout << "=== future_dh prediction |error| buckets ===" << std::endl;
+  for (int b = 0; b < NUM_EDGES - 1; ++b) {
+    std::cout << "  [" << FUTURE_BUCKET_EDGES[b] << ", " << FUTURE_BUCKET_EDGES[b + 1]
+               << "): " << future_error_buckets[b] << std::endl;
+  }
+  std::cout << "  [" << FUTURE_BUCKET_EDGES[NUM_EDGES - 1] << ", inf): "
+             << future_error_buckets[NUM_FUTURE_ERROR_BUCKETS - 1] << std::endl;
+
+  std::cout << "=== wait_dh prediction |error| buckets ===" << std::endl;
+  for (int b = 0; b <= 10; ++b) {
+    std::cout << "  " << b << ": " << wait_error_buckets[b] << std::endl;
+  }
+  std::cout << "  >10: " << wait_error_buckets[NUM_WAIT_ERROR_BUCKETS - 1] << std::endl;
 }
 
 int PIBT::is_swap_required_and_possible(const int i, const Config &Q_from,
