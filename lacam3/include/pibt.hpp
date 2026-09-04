@@ -64,6 +64,8 @@ struct PIBT {
   void fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to, const int start = 0);
   std::pair<double, double> get_future_penalty(const int i, const int j, Vertex* u_i, Vertex* u_j, const Config& Q_from, const Config& Q_to);
 
+  bool is_move_at_risk(int j, Vertex* u_j, const Config& Q_to);
+
   inline int pair_key(int i, int j) { 
     int lo = std::min(i, j), hi = std::max(i, j);
     return hi * N + lo;

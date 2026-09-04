@@ -3,14 +3,22 @@
 PairWiseDB* PIBT::pair_db = nullptr;
 bool PIBT::FIXED_TIE = false;
 
-const double DH_WEIGHT = 0.1;
-const double RANDOM_TIE_WEIGHT = 0.001;
+const double DH_WEIGHT = 0.01;
+const double RANDOM_TIE_WEIGHT = 0.1;
 const double TRAPPED_PENALTY = INT_MAX;
 
 const double WEIGHT_PRIORITIZED = 2.50;
 const double WEIGHT_GOOD_MOVE   = 2.00;
 const double WEIGHT_WAIT        = 1.50;
 const double WEIGHT_BAD_MOVE    = 1.00;
+
+static const double RADIUS_DECAY[] = {
+    1.0,                // r = 0 (failsafe)
+    1.0,                // r = 1
+    0.75,               // r = 2
+    0.5,                // r = 3
+    0.25,               // r = 4
+};
 
 // avg SoC=76.3 with gamma^2 and these params
 // const double WEIGHT_PRIORITIZED = 2.50;
@@ -121,27 +129,38 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
   return success;
 }
 
+bool PIBT::is_move_at_risk(int j, Vertex* u_j, const Config& Q_to) {
+  int k = occupied_now[u_j->id];
+  if (k != NO_AGENT && k != j && Q_to[k] == nullptr) return true;
+  for (auto u_k : u_j->neighbor) {
+    int k = occupied_now[u_k->id];
+    if (k != NO_AGENT && k != j && Q_to[k] == nullptr) return true;
+  }
+  return false;
+}
+
 std::pair<double, double> PIBT::get_future_penalty(const int i, const int j, Vertex* u_i, Vertex* u_j, const Config& Q_from, const Config& Q_to)
 {
-  double total_weight = 0;
-  double expected_penalty_sum = 0;
-  double expected_sq_penalty_sum = 0;
-  int D_wait = D->get(j, u_j);
-
   // Scatter
-  Vertex *j_prioritized = nullptr;
+  Vertex *j_scatter = nullptr;
   if (scatter != nullptr) {
     auto itr_s = scatter->scatter_data[i].find(Q_from[i]->id);
     if (itr_s != scatter->scatter_data[i].end()) {
-      j_prioritized = itr_s->second;
+      j_scatter = itr_s->second;
     }
   }
 
-  for (auto u_j_maybe : Q_from[j]->neighbor) {
-    //
-    // filter conflicting maybes
-    // 
+  int D_wait = D->get(j, u_j);
+  int min_dh = INT_MAX;
+  Vertex *u_good1 = nullptr, *u_good2 = nullptr, *u_good3 = nullptr;
+  int dh_good1 = INT_MAX, dh_good2 = INT_MAX, dh_good3 = INT_MAX;
+  bool has_valid_move = false;
+  bool any_maybe_outside_the_radius = false;
 
+  for (auto u_j_maybe : Q_from[j]->neighbor) {
+    ///
+    /// filter conflicting maybes
+    /// 
     // 1. Vertex collision with i: j cannot move to the cell i is claiming
     if (u_j_maybe == u_i) continue; 
     // 2. True Swap Conflict: only applies if they are exchanging places
@@ -152,47 +171,52 @@ std::pair<double, double> PIBT::get_future_penalty(const int i, const int j, Ver
     int agent_k = occupied_now[u_j_maybe->id];
     if (agent_k != NO_AGENT && Q_to[agent_k] == u_j) continue; 
 
-    // --- CONSERVATIVE WEIGHT LOGIC ---
-    double weight = WEIGHT_BAD_MOVE;
-    
-    double dh = pair_db->get(i, j, u_i, u_j_maybe);
-    int D_maybe = D->get(j, u_j_maybe);
+    if (u_j_maybe == j_scatter && !is_move_at_risk(j, u_j_maybe, Q_to))
+      return { pair_db->get(i, j, u_i, u_j_maybe), 1.0 };
 
-    if (u_j_maybe == j_prioritized) {
-      weight = WEIGHT_PRIORITIZED;    
-    } else if (D_maybe < D_wait) {
-      weight = WEIGHT_GOOD_MOVE;      
+    int D_maybe = D->get(j, u_j_maybe);
+    bool is_good = D_maybe < D_wait;
+    int dh = pair_db->get(i, j, u_i, u_j_maybe);
+
+    if (is_good) {
+      if      (u_good1 == nullptr) { u_good1 = u_j_maybe; dh_good1 = dh; }
+      else if (u_good2 == nullptr) { u_good2 = u_j_maybe; dh_good2 = dh; }
+      else if (u_good3 == nullptr) { u_good3 = u_j_maybe; dh_good3 = dh; }
     }
-    
-    total_weight += weight;
-    expected_penalty_sum += (weight * dh);
-    expected_sq_penalty_sum += (weight * dh * dh);
+
+    min_dh = std::min(min_dh, dh);
+    has_valid_move = true;
   }
 
   // j is forced to wait
-  if (total_weight == 0) {
+  if (!has_valid_move) {
     if (u_i == u_j) return {TRAPPED_PENALTY, 1.0}; 
     return {pair_db->get(i, j, u_i, u_j), 1.0};    
   }
 
-  // add the wait "move" if possible (if agent i is not pushing agent j)
-  if (u_i != u_j && occupied_next[u_j->id] == NO_AGENT) {
-    double dh = pair_db->get(i, j, u_i, u_j);
-    double weight = WEIGHT_WAIT;
-    total_weight += weight;
-    expected_penalty_sum += (weight * dh);
-    expected_sq_penalty_sum += (weight * dh * dh);
+  bool is_any_good_move_safe = 
+    (u_good1 != nullptr && !is_move_at_risk(j, u_good1, Q_to)) || 
+    (u_good2 != nullptr && !is_move_at_risk(j, u_good2, Q_to)) || 
+    (u_good3 != nullptr && !is_move_at_risk(j, u_good3, Q_to));
+
+  if (is_any_good_move_safe) {
+    int dh = std::min(dh_good1, std::min(dh_good2, dh_good3));
+    return { dh, 1.0 };
   }
 
-  // Mean and Variance
-  double future_dh = expected_penalty_sum / total_weight;
-  double mean_sq = expected_sq_penalty_sum / total_weight;
-  double variance = mean_sq - (future_dh * future_dh);
-  if (variance < 0) variance = 0;  
- 
-  // Dynamic Gamma
-  double gamma = 1.0 / (1.0 + variance);
-  return {future_dh, gamma};
+  int wait_penalty = (u_i == u_j)
+          ? pair_db->get(i, j, Q_from[i], u_j)
+          : pair_db->get(i, j, u_i      , u_j);
+
+  if (wait_penalty <= min_dh) 
+    return { min_dh, 1.0 };
+
+  double discounted_wait = wait_penalty * BASE_DISCOUNT;    
+
+  if (discounted_wait <= min_dh) {
+    return { min_dh, 1.0 };
+  }  
+  return { wait_penalty, BASE_DISCOUNT };
 }
 
 void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to, const int start)
@@ -200,40 +224,35 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
   for (int k = start; k < num_neighbors; ++k) {
     Vertex* u_i = neighbors[k];
     double max_penalty = 0;
+    double total_penalty = 0;
 
     for (Vertex* u_j : radial_neighbors[u_i->id]) {
+      int r = std::max(1, pair_db->D->get(u_i->id, u_j->id));
+      double r_scale = RADIUS_DECAY[r];
+
       // Check for agents moving TO this cell (PART 1)
       int j = occupied_next[u_j->id];
       if (j != NO_AGENT && j != i) {
-        double current_penalty = pair_db->get(i, j, u_i, u_j);
+        double current_penalty = r_scale * pair_db->get(i, j, u_i, u_j);
         if (current_penalty > max_penalty) max_penalty = current_penalty;
+        total_penalty += current_penalty;
       }
 
       // Check for agents CURRENTLY AT this cell (PART 2)
       j = occupied_now[u_j->id];
+      // int smaller_radius = PairWiseDB::RADIUS - 1;
       if (j != NO_AGENT && j != i && Q_to[j] == nullptr) {
-        auto [future_dh, gamma] = get_future_penalty(i, j, u_i, u_j, Q_from, Q_to);
-        if (future_dh >= TRAPPED_PENALTY) { 
-          max_penalty = future_dh; 
-          continue; 
-        }
-        double base_penalty = (u_i == u_j)
+        int wait_penalty = (u_i == u_j)
                 ? pair_db->get(i, j, Q_from[i], u_j)
-                : pair_db->get(i, j, u_i      , u_j);  
-
-        if (u_i != u_j) gamma *= gamma;
-
-        double expected_penalty = (base_penalty * BASE_DISCOUNT * (1.0 - gamma)) + (future_dh * gamma);
-        // double expected_penalty = gamma > threshold
-        //        ? future_dh * gamma
-        //        : base_penalty * BASE_DISCOUNT;
-
+                : pair_db->get(i, j, u_i      , u_j);
+        double expected_penalty = r_scale * wait_penalty * BASE_DISCOUNT;       
         if (expected_penalty > max_penalty) max_penalty = expected_penalty;
+        total_penalty += expected_penalty;
       }
     }
-
+    double final_penalty = max_penalty + (total_penalty - max_penalty) * 0.25;
     // Write the final maximum penalty to the pre-allocated array
-    dh_values[u_i->id] = DH_WEIGHT * max_penalty;
+    dh_values[u_i->id] = DH_WEIGHT * final_penalty;
   }
 }
 

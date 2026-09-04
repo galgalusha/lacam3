@@ -85,11 +85,14 @@ Solution Planner::solve()
 
   int pibt_deadlock_attempts = PIBT_DEADLOCK_ATTEMPTS;
 
+  int restart_counter;
+
   auto do_restart = [&](HNode* H, const std::string reason) {
     pibt_deadlock_attempts = PIBT_DEADLOCK_ATTEMPTS;
     HNode *restart_node = restarter->get_node_for_restart(H, H_goal);
     OPEN.push_front(restart_node);
     info(0, 1, deadline, "\tRestart at iteration: ", search_iter, "\tat depth: ", H->depth, "\tto depth: ", restart_node->depth, "\t", reason);
+    restart_counter++;
   };  
 
   // search loop
