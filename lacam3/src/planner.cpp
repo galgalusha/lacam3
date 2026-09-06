@@ -93,7 +93,9 @@ Solution Planner::solve()
     OPEN.push_front(restart_node);
     info(0, 1, deadline, "\tRestart at iteration: ", search_iter, "\tat depth: ", H->depth, "\tto depth: ", restart_node->depth, "\t", reason);
     restart_counter++;
-  };  
+  };
+
+  bool was_H_changed = true;
 
   // search loop
   while (!OPEN.empty() && !is_expired(deadline)) {
@@ -148,8 +150,11 @@ Solution Planner::solve()
 
     // create successors at the high-level search
     auto Q_to = Config(N, nullptr);
+    // pibts[0]->record_dh_errors = was_H_changed;
     auto res = set_new_config(H, L, Q_to);
     delete L;
+
+    was_H_changed = false;
 
     // failed? retry
     if (!res) {
@@ -158,7 +163,8 @@ Solution Planner::solve()
         do_restart(H, "deadlock");
       }
       continue;
-    };    
+    };
+    
 
     // check explored list
     auto iter = EXPLORED.find(Q_to);
@@ -179,10 +185,13 @@ Solution Planner::solve()
       OPEN.push_front(iter->second);
     } else {
       // new one -> insert
+      was_H_changed = true;
       auto H_new = create_highlevel_node(Q_to, H);
       OPEN.push_front(H_new);
     }
   }
+
+  // pibts[0]->print_dh_error_buckets();
 
   // clear pooled operaitons
   bool is_optimal = OPEN.empty();

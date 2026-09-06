@@ -16,6 +16,23 @@
 #include <unordered_map>
 
 struct PIBT {
+
+  struct FuturePenalty {
+    double dh1;
+    double dh2;
+    double dh3;
+    double dh4;
+    double dh5;
+    double dh6;
+    double dh7;
+
+    double certainty;
+
+    FuturePenalty(double dh) { dh1 = dh2 = dh3 = dh4 = dh5 = dh6 = dh7 = dh; certainty = 1.0; }    
+    FuturePenalty() { dh1 = dh2 = dh3 = dh4 = dh5 = dh6 = dh7 = 0.0; }    
+  };
+
+
   static PairWiseDB* pair_db;
   static bool FIXED_TIE;
 
@@ -41,16 +58,19 @@ struct PIBT {
 
   // swap, used in the LaCAM* paper
   bool flg_swap;
+  bool record_dh_errors;
 
   // scatter
   Scatter *scatter;
 
   // --- dh prediction accuracy tracking ---
   // a speculative dh estimate for agent i's candidate move u_i, w.r.t. neighbor agent j
+  static constexpr int NUM_DH_VARIANTS = 7;  // dh1..dh7
+
   struct DHPredictionRecord {
     Vertex *u_i = nullptr;
     bool has_future = false;
-    double future_dh = 0.0;  // from get_future_penalty (radius == 1)
+    double future_dh[NUM_DH_VARIANTS] = {};  // dh1..dh7, from get_future_penalty (radius == 1)
     bool has_wait = false;
     int wait_dh = 0;         // from direct pair_db lookup (radius != 1)
   };
@@ -61,6 +81,19 @@ struct PIBT {
   static constexpr int NUM_FUTURE_ERROR_BUCKETS = 13;  // 0-.25,.25-.5,.5-1,1-2,...,9-10, plus overflow (>=10)
   long long wait_error_buckets[NUM_WAIT_ERROR_BUCKETS] = {};
   long long future_error_buckets[NUM_FUTURE_ERROR_BUCKETS] = {};
+
+  // breakdown of the first 4 future error buckets: [was_wait][error_bucket][congestion_bucket]
+  static constexpr int NUM_BREAKDOWN_ERROR_BUCKETS = 4;       // 0-.25,.25-.5,.5-1,1-2
+  static constexpr int NUM_CONGESTION_BUCKETS = 4;            // 0-.25,.25-.5,.5-.75,.75-1
+  long long congestion_table[2][NUM_BREAKDOWN_ERROR_BUCKETS][NUM_CONGESTION_BUCKETS] = {};
+
+  // breakdown of wait_dh prediction success/failure by congestion: [is_error][congestion_bucket]
+  long long wait_congestion_table[2][NUM_CONGESTION_BUCKETS] = {};
+
+  // breakdown of future_dh (dhN) prediction success/failure by congestion: [dh_variant][is_error][congestion_bucket]
+  // is_error threshold is 0.25 for the first table, 0.5 for the second
+  long long future_congestion_table_025[NUM_DH_VARIANTS][2][NUM_CONGESTION_BUCKETS] = {};
+  long long future_congestion_table_05[NUM_DH_VARIANTS][2][NUM_CONGESTION_BUCKETS] = {};
 
   PIBT(const Instance *_ins, DistTable *_D, int seed = 0, bool _flg_swap = true,
        Scatter *_scatter = nullptr);
@@ -79,11 +112,16 @@ struct PIBT {
   bool is_swap_possible(Vertex *v_pusher_origin, Vertex *v_puller_origin);
 
   void fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to, const int start = 0);
-  double get_future_penalty(const int i, const int j, Vertex* u_i, Vertex* u_j, const Config& Q_from, const Config& Q_to);
+  FuturePenalty get_future_penalty(const int i, const int j, Vertex* u_i, Vertex* u_j, const Config& Q_from, const Config& Q_to);
+  // cheap pre-check: true iff get_future_penalty(i, j, u_i, u_j, ...) is guaranteed to be 0
+  bool is_surely_zero(const int i, const int j, Vertex* u_i, Vertex* u_j, const Config& Q_from, const Config& Q_to);
 
   int get_move_risk(int j, Vertex* u_j, const Config& Q_to, int agent_i);
 
-  void evaluate_dh_predictions(const Config &Q_to);
+  // fraction of v's radial neighbors that are currently occupied
+  double get_congestion(Vertex* v);
+
+  void evaluate_dh_predictions(const Config &Q_from, const Config &Q_to);
   void print_dh_error_buckets();
 
   inline int pair_key(int i, int j) { 
