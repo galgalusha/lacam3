@@ -287,36 +287,15 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
       j = occupied_now[u_j->id];
       if (j != NO_AGENT && j != i && Q_to[j] == nullptr) {
         double expected_penalty;
-        if (r == 1) {
-          if (record_dh_errors && is_surely_zero(i, j, u_i, u_j, Q_from, Q_to)) {
-            expected_penalty = 0;
-          } else {
         FuturePenalty fp = get_future_penalty(i, j, u_i, u_j, Q_from, Q_to);
-            expected_penalty = fp.dh1;            
-            if (record_dh_errors) {
-              int wait_penalty = (u_i == u_j)
+        int dh_wait = (u_i == u_j)
                 ? pair_db->get(i, j, Q_from[i], u_j)
                 : pair_db->get(i, j, u_i      , u_j);
-              auto& rec = dh_prediction_cache[dh_cache_key(i, j)][k];
-              rec.u_i = u_i;
-              rec.has_future = true;
-              rec.future_dh[0] = fp.dh1;
-              rec.future_dh[1] = fp.dh2;
-              rec.future_dh[2] = fp.dh3;
-              rec.future_dh[3] = fp.dh4;
-              rec.future_dh[4] = fp.dh5;
-              rec.future_dh[5] = fp.dh6;
-              rec.future_dh[6] = fp.dh7;
-              rec.has_wait = true;
-              rec.wait_dh = wait_penalty;
-            }
-          }
-        } else {
-          int wait_penalty = (u_i == u_j)
-                  ? pair_db->get(i, j, Q_from[i], u_j)
-                  : pair_db->get(i, j, u_i      , u_j);
-          expected_penalty = r_scale * wait_penalty * BASE_DISCOUNT;
-        }
+
+        expected_penalty = r == 1 
+                ? fp.dh1
+                : (dh_wait + fp.dh_min) * 0.5;
+
         if (expected_penalty > max_penalty) max_penalty = expected_penalty;
         total_penalty += expected_penalty;
       }

@@ -25,11 +25,12 @@ struct PIBT {
     double dh5;
     double dh6;
     double dh7;
+    double dh_min;
 
     double certainty;
 
-    FuturePenalty(double dh) { dh1 = dh2 = dh3 = dh4 = dh5 = dh6 = dh7 = dh; certainty = 1.0; }    
-    FuturePenalty() { dh1 = dh2 = dh3 = dh4 = dh5 = dh6 = dh7 = 0.0; }    
+    FuturePenalty(double dh) { dh_min = dh1 = dh2 = dh3 = dh4 = dh5 = dh6 = dh7 = dh; certainty = 1.0; }    
+    FuturePenalty() { dh_min = dh1 = dh2 = dh3 = dh4 = dh5 = dh6 = dh7 = 0.0; }    
   };
 
 
