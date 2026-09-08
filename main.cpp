@@ -6,6 +6,7 @@
 #include <pair_wise_db.hpp>
 #include <drawing.hpp>
 #include <asha_planner.hpp>
+#include <pattern_db.hpp>
 
 int main(int argc, char *argv[])
 {
@@ -54,6 +55,10 @@ int main(int argc, char *argv[])
       .implicit_value(true);
   program.add_argument("--pair-db-gen")
       .help("Generate PairDB Database")
+      .default_value(false)
+      .implicit_value(true);
+  program.add_argument("--pattern-db-gen")
+      .help("Generate PatternDB")
       .default_value(false)
       .implicit_value(true);
   program.add_argument("--pair-db-test")
@@ -126,6 +131,7 @@ int main(int argc, char *argv[])
   const auto map_name = program.get<std::string>("map");
   const auto test_pair_db = program.get<bool>("pair-db-test");
   const auto gen_pair_db = program.get<bool>("pair-db-gen");
+  const auto gen_pattern_db = program.get<bool>("pattern-db-gen");
   const auto asha_planner = program.get<bool>("asha");
   const auto fixed_tie = program.get<bool>("fixed-tie");
   const auto use_pair_db = program.get<bool>("pair-db");
@@ -133,9 +139,7 @@ int main(int argc, char *argv[])
     std::cerr << "error: map file must have a .map extension to use --pair-db" << std::endl;
     return 1;
   }
-  const auto pair_db_name = (use_pair_db || gen_pair_db || test_pair_db)
-      ? std::filesystem::path(map_name).stem().string()
-      : std::string("");
+  const auto pair_db_name = std::filesystem::path(map_name).stem().string();
   const auto output_name = program.get<std::string>("output");
   const auto log_short = program.get<bool>("log_short");
   const auto N = std::stoi(program.get<std::string>("num"));
@@ -191,6 +195,16 @@ int main(int argc, char *argv[])
     pair_db_mem.write_bin2_files();
     std::cout << "\nDone. You can delete the bin files and leave only the bin2 files." << std::endl;
     exit(0);
+  }
+
+  if (gen_pattern_db) {
+    std::cout << "\n[1] Loading pair DB" << std::endl;
+    auto pair_db = new PairWiseDB(ins.G, pair_db_name);
+    pair_db->load_kernels(&ins);
+    std::cout << "\n[2] Generating Pattern DB" << std::endl;
+    auto pattern_db = new PatternDB();
+    pattern_db->set_instance(&ins);
+    pattern_db->populate_from(pair_db);
   }
 
   PIBT::FIXED_TIE = fixed_tie;
