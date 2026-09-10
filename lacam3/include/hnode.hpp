@@ -36,6 +36,10 @@ struct HNode {
 
   HNode(Config _C, DistTable *D, HNode *_parent = nullptr, int _g = 0,
         int _h = 0, std::vector<bool> _modes = {});
+
+  void clear_tree();
+  void reset_tree();
+
   ~HNode();
 
   LNode *get_next_lowlevel_node(std::mt19937 &MT);

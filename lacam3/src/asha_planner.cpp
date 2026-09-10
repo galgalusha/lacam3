@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <iostream>
 
+// int DEBUG_AGENT = 50;
+int DEBUG_AGENT = 51;
+
 
 const int PIBT_DEADLOCK_ATTEMPTS = 500;
 constexpr auto TIME_ZERO = std::chrono::seconds(0);
@@ -37,7 +40,7 @@ ASHA_Planner::ASHA_Planner(const Instance *_ins, int _verbose, const Deadline *_
       D((_D == nullptr) ? new DistTable(ins) : _D),
       delete_dist_table_after_used(false),
       FLG_PREFIX_REFINEMENT(_prefix_goals != nullptr),
-      prefix_goals(_prefix_goals ? *_prefix_goals : Config{}),
+      prefix_goals(_prefix_goals != nullptr ? *_prefix_goals : Config{}),
       dmt((_prefix_goals != nullptr) ? static_cast<DoubleModeDistTable *>(_D) : nullptr),
       heuristic(new Heuristic(ins, D)),
       scatter(nullptr),
@@ -127,51 +130,58 @@ Solution ASHA_Planner::solve()
 }
 
 HNode* ASHA_Planner::refine_prefix(LaCAM_Res& res_init) {
-  HNode* p_H_goal = go_back_to_depth_ratio(H_goal, 0.25);
+  HNode* p_H_goal = go_back_to_depth_ratio(H_goal, 0.15);
   Config prefix_goals_cfg = p_H_goal->C;
 
   // D (toward real goals) already exists; build D_prefix toward prefix goals
   Instance p_ins_for_d(ins->G, ins->starts, prefix_goals_cfg, ins->N);
-  auto *D_prefix = new DistTable(&p_ins_for_d);
-  auto *p_dmt = new DoubleModeDistTable(ins->G->size(), D_prefix, D);
+  // auto *D_prefix = new DistTable(&p_ins_for_d);
+  // auto *p_dmt = new DoubleModeDistTable(ins->G->size(), D_prefix, D);
 
-  ASHA_Planner planner(ins, verbose, deadline,
-                        get_random_int(MT, 0, 10000000), p_dmt, &prefix_goals_cfg);
-  planner.set_scatter();
+  ASHA_Planner planner(&p_ins_for_d, verbose, deadline,
+                        get_random_int(MT, 0, 10000000));
+  planner.scatter = scatter;
+  // planner.set_scatter();
   planner.set_pibt();
-  int MAX_FAILURES = 10;
+  int MAX_FAILURES = 100;
   int trials_left = MAX_FAILURES;
-  int max_depth =  H_goal->depth * 1.5;
-  int best_cost = p_H_goal->g;
-  int upper_bound = best_cost * 1.2;
-  int max_iters = res_init.iterations * 1.5;
+  int max_depth =  p_H_goal->depth + 2;
+  int best_cost = p_H_goal->g * 1.05;
+  int upper_bound = best_cost * 1.05;
+  int max_iters = res_init.iterations;
   HNode* H_best = nullptr;
   HNode* p_H_init = planner.create_highlevel_node(ins->starts, nullptr);
 
+  std::cout << "[ASHA] elapsed:" << std::setw(6) << elapsed_ms(deadline) << "ms  "
+            << "Running prefix refinement. "
+            << ", mid depth: " << p_H_goal->depth << ", mid g: " << p_H_goal->g
+            << ", UB: " << upper_bound
+            << std::endl;
+
   while (!is_expired(deadline) && trials_left--) {
-    std::cout << "[ASHA] elapsed:" << std::setw(6) << elapsed_ms(deadline) << "ms  "
-              << "Running prefix refinement. Trials left: " << trials_left 
-              << ", mid depth: " << p_H_goal->depth << ", mid g: " << p_H_goal->g
-              << ", UB: " << upper_bound
-              << std::endl;
+    //p_H_init->reset_tree();
     auto res = planner.run_lacam(p_H_init, max_iters, upper_bound, max_depth);
-    if (res.is_success && res.H->g < best_cost) {
-      std::cout << "Cost update: " << res.H->g << std::endl;
+    if (res.is_goal && res.H->g < best_cost) {
+      std::cout << "Cost update: " << res.H->g
+                << "\t at depth: " << res.H->depth
+                << std::endl;
       best_cost = res.H->g;
-      upper_bound = res.H->g * 1.2;
       H_best = res.H;
       trials_left = MAX_FAILURES;
+      upper_bound = best_cost - 1;
     } else {
+      // int num_reached = std::count(res.H->agent_modes.begin(), res.H->agent_modes.end(), true);
       std::cout << "[ASHA] elapsed:" << std::setw(6) << elapsed_ms(deadline) << "ms  "
-                << "Trial failed. is_success: " << res.is_success 
+                << "is_success: " << res.is_success 
                 << ", depth: " << res.H->depth << ", max_depth: " << max_depth
                 << ", iters: " << res.iterations << ", max_iters: " << max_iters 
-                << ", g: " << res.H->g << ", f: " << res.H->f << ", UB: " << upper_bound
-                << std::endl;
+                << ", g: " << res.H->g << ", UB: " << upper_bound
+//                << ", reached_mid_goals: " << num_reached << "/" << N
+                << "\t FAILED" << std::endl;
     }
   }
-  delete D_prefix;
-  delete p_dmt;
+  // delete D_prefix;
+  // delete p_dmt;
   if (H_best == nullptr) return nullptr;
   H_best = go_back_to_depth(H_best, p_H_goal->depth);
 
@@ -215,6 +225,8 @@ HNode* ASHA_Planner::refine_prefix(LaCAM_Res& res_init) {
   std::cout << "[ASHA] elapsed:" << std::setw(6) << elapsed_ms(deadline) << "ms  "
             << "Returning H_start at depth: " << best_start->depth << ", g: " << best_start->g
             << std::endl;  
+
+  exit(0);            
   return best_start;
 }
 
@@ -230,7 +242,7 @@ ASHA_Planner::LaCAM_Res ASHA_Planner::run_lacam(HNode* H_from, int max_iteration
   HNode* H = H_from;
   int search_iter = 0;
 
-  while (search_iter <= max_iterations && !is_expired(deadline) && H->depth <= max_depth && H->f <= upper_bound) {
+  while (search_iter <= max_iterations && !is_expired(deadline) && H->depth <= max_depth && H->g <= upper_bound) {
     search_iter += 1;
 
     // low level search
@@ -247,12 +259,26 @@ ASHA_Planner::LaCAM_Res ASHA_Planner::run_lacam(HNode* H_from, int max_iteration
     bool pibt_res;
     if (FLG_PREFIX_REFINEMENT) {
       dmt->set_active_modes(&H->agent_modes);
-      auto &mutable_goals = const_cast<Config &>(ins->goals);
-      const Config orig_goals = mutable_goals;
+      const Config& orig_goals = ins->goals;
       for (int i = 0; i < N; ++i)
-        mutable_goals[i] = H->agent_modes[i] ? orig_goals[i] : prefix_goals[i];
+        pibt->goals[i] = H->agent_modes[i] ? orig_goals[i] : prefix_goals[i];
       pibt_res = pibt->set_new_config(H->C, Q_to, H->order);
-      mutable_goals = orig_goals;
+
+      // auto v_str = [&](Vertex* v) -> std::string {
+      //   return "(" + std::to_string(v->x) + ", " + std::to_string(v->y) + ")";
+      // };
+
+      // std::cout << "[DEBUG agent=" << DEBUG_AGENT << "]"
+      //           << " depth: " << H->depth
+      //           << ", reached mid: " << H->agent_modes[DEBUG_AGENT]
+      //           << ", pibt.goal: " << v_str(pibt->goals[DEBUG_AGENT])
+      //           << ", real goal: " << v_str(ins->goals[DEBUG_AGENT])
+      //           << ", mid goal: " << v_str(prefix_goals[DEBUG_AGENT])
+      //           << ", D: " << dmt->get(DEBUG_AGENT, H->C[DEBUG_AGENT])
+      //           << std::endl;
+
+      pibt->goals = orig_goals;
+
     } else {
       pibt_res = pibt->set_new_config(H->C, Q_to, H->order);
     }
@@ -287,7 +313,8 @@ ASHA_Planner::LaCAM_Res ASHA_Planner::run_lacam(HNode* H_from, int max_iteration
 
     // check explored list before creating a node, to avoid overwriting EXPLORED
     auto iter = EXPLORED.find(Q_to);
-    if (iter != EXPLORED.end() && !FLG_PREFIX_REFINEMENT) {
+//    if (iter != EXPLORED.end() && !FLG_PREFIX_REFINEMENT) {
+    if (iter != EXPLORED.end()) {
       auto* H_existing = iter->second;
       // compute tentative g for the path through H
       // (create_highlevel_node would do this; replicate cheaply here)
@@ -330,7 +357,7 @@ ASHA_Planner::LaCAM_Res ASHA_Planner::run_lacam(HNode* H_from, int max_iteration
     }
   }
 
-  if (H->depth - 1 > max_depth || H->f > upper_bound)
+  if (H->depth - 1 > max_depth || H->g > upper_bound)
     return { H, search_iter, false, false };
 
   return  { H, search_iter, false, true };
@@ -412,8 +439,9 @@ int ASHA_Planner::get_edge_cost(const Config &C1, const Config &C2,
 {
   auto cost = 0;
   for (uint i = 0; i < N; ++i) {
-    if (modes && (*modes)[i]) continue;  // phase 2: free
-    const Vertex *goal = (modes && FLG_PREFIX_REFINEMENT) ? prefix_goals[i] : ins->goals[i];
+    // if (modes && (*modes)[i]) continue;  // phase 2: free
+    // const Vertex *goal = (modes && FLG_PREFIX_REFINEMENT) ? prefix_goals[i] : ins->goals[i];
+    const Vertex *goal = ins->goals[i];
     if (C1[i] != goal || C2[i] != goal) cost += 1;
   }
   return cost;
@@ -438,7 +466,7 @@ void ASHA_Planner::set_scatter()
 
 void ASHA_Planner::set_pibt()
 {
-  pibt = new PIBT(ins, D, seed, Planner::FLG_SWAP, scatter);
+  pibt = new PIBT(ins->G, ins->goals, D, seed, Planner::FLG_SWAP, scatter);
 }
 
 void ASHA_Planner::logging()

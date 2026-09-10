@@ -37,7 +37,9 @@ struct PIBT {
   static PairWiseDB* pair_db;
   static bool FIXED_TIE;
 
-  const Instance *ins;
+  Config goals;
+  const Graph* G;
+
   std::mt19937 MT;
 
   // solver utils
@@ -96,7 +98,7 @@ struct PIBT {
   long long future_congestion_table_025[NUM_DH_VARIANTS][2][NUM_CONGESTION_BUCKETS] = {};
   long long future_congestion_table_05[NUM_DH_VARIANTS][2][NUM_CONGESTION_BUCKETS] = {};
 
-  PIBT(const Instance *_ins, DistTable *_D, int seed = 0, bool _flg_swap = true,
+  PIBT(const Graph *_G, Config _goals, DistTable *_D, int seed = 0, bool _flg_swap = true,
        Scatter *_scatter = nullptr);
   ~PIBT();
 

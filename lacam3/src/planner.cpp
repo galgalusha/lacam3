@@ -355,7 +355,7 @@ void Planner::set_scatter()
 void Planner::set_pibt()
 {
   for (auto k = 0; k < PIBT_NUM; ++k) {
-    pibts.emplace_back(new PIBT(ins, D, k + seed, FLG_SWAP, scatter));
+    pibts.emplace_back(new PIBT(ins->G, ins->goals, D, k + seed, FLG_SWAP, scatter));
   }
 }
 

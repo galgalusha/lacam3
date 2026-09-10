@@ -41,6 +41,10 @@ HNode::HNode(Config _C, DistTable *D, HNode *_parent, int _g, int _h,
         priorities[i] = parent->priorities[i] + 1;
       } else {
         priorities[i] = parent->priorities[i] - (int)parent->priorities[i];
+        // if (parent != nullptr && parent->agent_modes[i] == false && agent_modes[i] == true) {
+        //   // std::cout << "Reducing priority of agent " << i << std::endl;
+        //   priorities[i] -= 100;
+        // }
       }
     }
   }
@@ -51,12 +55,21 @@ HNode::HNode(Config _C, DistTable *D, HNode *_parent, int _g, int _h,
             [&](int i, int j) { return priorities[i] > priorities[j]; });
 }
 
-HNode::~HNode()
-{
+void HNode::reset_tree() {
+  clear_tree();
+  search_tree.push(new LNode());
+}
+
+void HNode::clear_tree() {
   while (!search_tree.empty()) {
     delete search_tree.front();
     search_tree.pop();
   }
+}
+
+HNode::~HNode()
+{
+  clear_tree();
 }
 
 LNode *HNode::get_next_lowlevel_node(std::mt19937 &MT)

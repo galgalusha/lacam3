@@ -7,6 +7,9 @@
 #include <drawing.hpp>
 #include <asha_planner.hpp>
 #include <pattern_db.hpp>
+#include <mdd.hpp>
+#include <horizon_pair_db.hpp>
+
 
 int main(int argc, char *argv[])
 {
@@ -223,6 +226,18 @@ int main(int argc, char *argv[])
     PIBT::pair_db->load_kernels(&ins);
     // PIBT::pair_db->load_all2(&ins);
   }
+
+//   int agent = 0;
+//   MDD mdd(agent);
+//   PairWiseDB pdb(ins.G, "bla");
+//   mdd.populate(pdb.D, ins.starts[agent], ins.goals[agent], HorizonPairDB::HORIZON);
+//   mdd.render(&ins);
+//   exit(0);
+  HorizonPairDB db(ins.G);
+  db.generate_mdds();
+  db.generate_conflicting_pairs();
+  exit(0);
+
 
   // solve
 

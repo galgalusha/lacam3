@@ -34,12 +34,13 @@ const double RISK_NUM_TO_PROB[6] = { 1.0, 0.8, 0.6, 0.4, 0.2, 0.0 };
 const double BASE_DISCOUNT      = 0.50;
 
 
-PIBT::PIBT(const Instance *_ins, DistTable *_D, int seed, bool _flg_swap,
+PIBT::PIBT(const Graph *_G, Config _goals, DistTable *_D, int seed, bool _flg_swap,
            Scatter *_scatter)
-    : ins(_ins),
+    : G(_G),
+      goals(_goals),
       MT(std::mt19937(seed)),
-      N(ins->N),
-      V_size(ins->G->size()),
+      N(goals.size()),
+      V_size(G->size()),
       D(_D),
       NO_AGENT(N),
       occupied_now(V_size, NO_AGENT),
@@ -51,7 +52,7 @@ PIBT::PIBT(const Instance *_ins, DistTable *_D, int seed, bool _flg_swap,
       flg_swap(_flg_swap),
       scatter(_scatter),
       pair_distances(N*N),
-      radial_neighbors(ins->G->V.size())
+      radial_neighbors(G->V.size())
 {
   if (pair_db) setup_pair_db();
   record_dh_errors = false;
@@ -61,10 +62,10 @@ PIBT::~PIBT() {
 }
 
 void PIBT::setup_pair_db() {
-  const int width = ins->G->width;
-  const int height = ins->G->height;
+  const int width = G->width;
+  const int height = G->height;
   const int r = PairWiseDB::RADIUS;
-  for (Vertex* u_i : ins->G->V) {
+  for (Vertex* u_i : G->V) {
     auto& vec = radial_neighbors[u_i->id];
     for (int dy = -r; dy <= r; ++dy) {
       for (int dx = -r; dx <= r; ++dx) {
@@ -72,7 +73,7 @@ void PIBT::setup_pair_db() {
         const int nx = u_i->x + dx;
         const int ny = u_i->y + dy;
         if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
-        Vertex* u_j = ins->G->U[ny * width + nx];
+        Vertex* u_j = G->U[ny * width + nx];
         if (u_j == nullptr || pair_db->D->get(u_i->id, u_j->id) > r) continue;
         vec.push_back(u_j);
       }
@@ -627,7 +628,7 @@ bool PIBT::is_swap_required(const int pusher, const int puller,
     for (auto u : v_puller->neighbor) {
       const auto i = occupied_now[u->id];
       if (u == v_pusher ||
-          (u->neighbor.size() == 1 && i != NO_AGENT && ins->goals[i] == u)) {
+          (u->neighbor.size() == 1 && i != NO_AGENT && goals[i] == u)) {
         --n;
       } else {
         tmp = u;
@@ -655,7 +656,7 @@ bool PIBT::is_swap_possible(Vertex *v_pusher_origin, Vertex *v_puller_origin)
     for (auto u : v_puller->neighbor) {
       const auto i = occupied_now[u->id];
       if (u == v_pusher ||
-          (u->neighbor.size() == 1 && i != NO_AGENT && ins->goals[i] == u)) {
+          (u->neighbor.size() == 1 && i != NO_AGENT && goals[i] == u)) {
         --n;
       } else {
         tmp = u;
