@@ -9,11 +9,28 @@
 #include <iostream>
 
 /**
- * TODO:
+ * ## TODO
  * 1. Group agents by MDD
  * 2. Use Joint MDD to filter real conflicts
  * 3. To distinct between dh=1 (wait is required) and dh>=2 (detour is required),
  *    it is enough to check if a shifted MDD makes the joint MDD stop detecting conflicts.
+ * 
+ * ## For PIBT
+ * For an agent i, we need to find every agent j that has a conflict within the horizon.
+ * Suppose horizon=5. The MDD of agent i contains thousands of possible conflicts in
+ * the DB. Iterating them is not a good option. Iterating through all agents j for every
+ * agent i is also a bad option. We don't want N^2 complexity in PIBT.
+ * What we do is pre-calculate (before the solver begins) an MDD for each possible agent 
+ * setting (v_i, goal_i). For horizon=5, the max MDD size is 21 vertices.
+ * During PIBT, before iterating the agents and calling funcPIBT, iterate through all
+ * agent MDDs to build an index from (vertex, time) to an agent id. Complexity is N*21.
+ * We don't use a real map but rather an array with an idex of (time*|V|+vertex.id).
+ * When agent i considers moving from v_i to u_i, we can pick the MDD for u_i from the
+ * MDD cache. For each (time, vertex) in this MDD, we can find conflicts using the index.
+ * However, this assumes the other agents are stationary. So when an agent actually moves,
+ * we need to remove its previous MDD from the index and update the index with its new MDD.
+ * Another option is not to create accurate MDDs in the pre-calculation but rather
+ * an extended structure, lets call it EMDD, that considers all possible moves.
  */
 
 const int HorizonPairDB::HORIZON = 5;
