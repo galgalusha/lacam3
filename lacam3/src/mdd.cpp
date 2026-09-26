@@ -249,13 +249,18 @@ void MDD::test_joint_mdd2() {
   auto C_start = coord(1, 0);
   auto C_goal  = coord(1, 1);
 
+  auto D_start = A_goal; // swap conflict with A
+  auto D_goal  = A_start;
+
   MDD mdd_A;
   MDD mdd_B;
   MDD mdd_C;
+  MDD mdd_D;
 
   mdd_A.populate(D, A_start, A_goal, 5);
   mdd_B.populate(D, B_start, B_goal, 5);
   mdd_C.populate(D, C_start, C_goal, 5);
+  mdd_D.populate(D, D_start, D_goal, 5);
 
   bool actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B, G);
   bool expected_conflict = false;
@@ -270,6 +275,14 @@ void MDD::test_joint_mdd2() {
 
   if (actual_conflict != expected_conflict) {
     std::cout << "Failed to detect a conflict between A and C" << std::endl;
+    exit(0);
+  }
+
+  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_D, G);
+  expected_conflict = true;
+
+  if (actual_conflict != expected_conflict) {
+    std::cout << "Failed to detect a conflict between A and D" << std::endl;
     exit(0);
   }
 
