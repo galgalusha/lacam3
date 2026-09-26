@@ -20,6 +20,8 @@ namespace drawing_detail {
   static constexpr const char* YELLOW = "\033[33m";
   static constexpr const char* CYAN   = "\033[36m";
   static constexpr const char* BOLD_W = "\033[1;37m";
+  static constexpr const char* RED    = "\033[31m";
+  static constexpr const char* GREEN  = "\033[32m";
 }
 
 // Optional extras for draw_instance

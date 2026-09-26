@@ -235,7 +235,8 @@ int main(int argc, char *argv[])
 //   exit(0);
   HorizonPairDB db(ins.G);
   db.generate_mdds();
-  db.generate_conflicting_pairs();
+//   db.generate_conflicting_pairs();
+  db.interactive_mdd_test();
   exit(0);
 
 

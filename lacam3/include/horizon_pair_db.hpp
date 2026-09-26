@@ -26,4 +26,8 @@ struct HorizonPairDB {
 
   void generate_conflicting_pairs();
 
+  // Prompts the user for (v_i, g_i), renders the resulting MDD, and repeats
+  // indefinitely until the process is killed.
+  void interactive_mdd_test();
+
 };

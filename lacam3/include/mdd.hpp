@@ -19,6 +19,8 @@ struct MDD {
 
   void render(Instance* ins);
 
+  std::string str() const;
+
   bool operator==(const MDD& other) const {
     if (frontiers.size() != other.frontiers.size()) return false;
     for (size_t t = 0; t < frontiers.size(); ++t) {

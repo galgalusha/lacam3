@@ -1,6 +1,7 @@
 #include "../include/mdd.hpp"
 #include "../include/drawing.hpp"
 
+#include <sstream>
 #include <unordered_map>
 
 
@@ -44,7 +45,24 @@ void MDD::populate(DistTable* D, Vertex* v_i, Vertex* v_g, int horizon) {
 }
 
 
+std::string MDD::str() const {
+  std::ostringstream oss;
+  oss << "{ ";
+  for (size_t t = 0; t < frontiers.size(); t++) {
+    if (t > 0) oss << ", ";
+    oss << t << ": [";
+    for (size_t i = 0; i < frontiers[t].size(); i++) {
+      if (i > 0) oss << ", ";
+      oss << frontiers[t][i]->id;
+    }
+    oss << "]";
+  }
+  oss << " }";
+  return oss.str();
+}
+
 void MDD::render(Instance* ins) {
+  int agent_id = frontiers[0][0]->id; // not really an agent id, but its OK for coloring
   using namespace drawing_detail;
   const Graph* G = ins->G;
   const int W = G->width;
@@ -67,7 +85,7 @@ void MDD::render(Instance* ins) {
       if (it == depth_of.end()) {
         std::cout << (G->U[idx] ? '.' : '#');
       } else {
-        std::cout << COLORS[frontiers[0][0]->id % NUM_COLORS] << (it->second % 10) << RESET;
+        std::cout << COLORS[agent_id % NUM_COLORS] << (it->second % 10) << RESET;
       }
     }
     std::cout << '\n';

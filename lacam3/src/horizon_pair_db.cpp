@@ -1,12 +1,14 @@
 #include "../include/horizon_pair_db.hpp"
 #include "../include/thread_pool.hpp"
 #include "../include/pair_wise_bin.hpp" // for thread pool
+#include "../include/drawing.hpp"
 
 #include <atomic>
 #include <iomanip>
 #include <mutex>
 #include <algorithm>
 #include <iostream>
+#include <unordered_map>
 #include <absl/container/flat_hash_map.h>
 
 /**
@@ -98,6 +100,15 @@ void HorizonPairDB::generate_mdds() {
         // 2. Lock-free write! mdd_by_id is pre-allocated and mdd_id is strictly unique.
         mdd_by_id[mdd_id] = mdd;
       }
+
+      // if (v_i == 321) {
+      //   std::lock_guard lock1(io_mtx);
+      //   std::lock_guard lock2(mdd_mtx2);
+      //   std::lock_guard lock3(mdd_count_mtx);
+      //   std::cout << "v_i: " << v_i << ", mdd_id: " << mdd_id << ", g_i: " << g_i 
+      //             << "\t " << mdd.str()
+      //             << std::endl;
+      // }
 
       // Lock-free write! agent_id is strictly unique per loop iteration.
       mdd_id_by_agent[agent_id] = mdd_id;
@@ -204,5 +215,54 @@ void HorizonPairDB::generate_conflicting_pairs() {
 
     // std::cout << std::endl;
     // std::cout << "Unique conflicting pairs: " << total_unique_pairs << "\n";
+}
+
+void HorizonPairDB::interactive_mdd_test() {
+  using namespace drawing_detail;
+  const int W = G->width;
+  const int H = G->height;
+
+  while (true) {
+    std::cout << "Enter v_i (start vertex id, 0-" << G->V.size() - 1 << "): ";
+    int v_i;
+    if (!(std::cin >> v_i)) break;
+
+    std::cout << "Enter g_i (goal vertex id, 0-" << G->V.size() - 1 << "): ";
+    int g_i;
+    if (!(std::cin >> g_i)) break;
+
+    if (v_i < 0 || v_i >= (int)G->V.size() || g_i < 0 || g_i >= (int)G->V.size()) {
+      std::cout << "Invalid vertex id(s), must be within [0, " << G->V.size() - 1 << "]\n";
+      continue;
+    }
+
+    MDD mdd;
+    mdd.populate(D, G->V[v_i], G->V[g_i], HORIZON);
+
+    const int goal_index = G->V[g_i]->index;
+
+    std::unordered_map<int, int> depth_of_index;
+    for (size_t depth = 0; depth < mdd.frontiers.size(); depth++)
+      for (Vertex* v : mdd.frontiers[depth])
+        depth_of_index.emplace(v->index, (int)depth);  // keep earliest depth
+
+    for (int y = 0; y < H; y++) {
+      for (int x = 0; x < W; x++) {
+        int idx = W * y + x;
+        auto it = depth_of_index.find(idx);
+        if (idx == goal_index) {
+          std::cout << GREEN << 'G' << RESET;
+        } else if (it != depth_of_index.end()) {
+          const char* color = (it->second == 0) ? GREEN : RED;
+          std::cout << color << (char)('0' + it->second % 10) << RESET;
+        } else {
+          std::cout << (G->U[idx] ? '.' : '#');
+        }
+      }
+      std::cout << '\n';
+    }
+
+    std::cout << mdd.str() << '\n';
+  }
 }
 
