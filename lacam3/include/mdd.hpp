@@ -44,6 +44,12 @@ struct MDD {
       }
     }
     return h;
-  }  
+  }
+
+  bool check_joint_mdd_conflict(MDD& other_mdd, Graph* G);
+
+  static void test_joint_mdd();
+  static void test_joint_mdd2();
+
 };
 

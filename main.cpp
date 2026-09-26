@@ -227,16 +227,12 @@ int main(int argc, char *argv[])
     // PIBT::pair_db->load_all2(&ins);
   }
 
-//   int agent = 0;
-//   MDD mdd(agent);
-//   PairWiseDB pdb(ins.G, "bla");
-//   mdd.populate(pdb.D, ins.starts[agent], ins.goals[agent], HorizonPairDB::HORIZON);
-//   mdd.render(&ins);
+//   HorizonPairDB db(ins.G);
+//   db.generate_mdds();
+//   db.generate_conflicts();
 //   exit(0);
-  HorizonPairDB db(ins.G);
-  db.generate_mdds();
-  db.generate_conflicts();
-//  db.interactive_mdd_test();
+  MDD::test_joint_mdd();
+  MDD::test_joint_mdd2();
   exit(0);
 
 
