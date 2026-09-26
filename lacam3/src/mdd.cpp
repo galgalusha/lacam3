@@ -15,21 +15,9 @@ void MDD::populate(DistTable* D, Vertex* v_i, Vertex* v_g, int horizon) {
   for (t = 1; t <= horizon; t++) { 
     bool was_goal_inserted_for_this_depth = false;
     for (Vertex* v_t_minus_1 : frontiers[t - 1]) {
-      
-      // // 2. Goal Sink Fix: If the agent reached the goal early, it must wait in place.
-      // if (v_t_minus_1 == v_g) {
-      //   // Ensure we don't add the goal multiple times if multiple paths converge
-      //   if (!was_goal_inserted_for_this_depth) {
-      //     mdd[t].push_back(v_g);
-      //     was_goal_inserted_for_this_depth = true;
-      //   }
-      //   continue; // Skip neighbor expansion
-      // }
-
       for (Vertex* v_t : v_t_minus_1->neighbor) {
         // Verify optimal progression
         if (D->get(v_t->id, v_g->id) == D_t_minus_1 - 1) {
-          
           // 3. Duplicate Prevention: Since K is tiny, layer sizes are small. 
           // A linear std::find is faster than allocating a std::unordered_set.
           if (std::find(frontiers[t].begin(), frontiers[t].end(), v_t) == frontiers[t].end()) {
@@ -41,7 +29,8 @@ void MDD::populate(DistTable* D, Vertex* v_i, Vertex* v_g, int horizon) {
     D_t_minus_1--;
     if (D_t_minus_1 < 0) { break; }
   }
-  frontiers.resize(t);
+  // goal reached before horizon: pad remaining depths with the goal vertex
+  for (int t_pad = t; t_pad <= horizon; t_pad++) frontiers[t_pad].push_back(v_g);
 }
 
 

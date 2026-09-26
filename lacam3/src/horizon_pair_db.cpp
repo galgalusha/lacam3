@@ -10,6 +10,8 @@
 #include <iostream>
 #include <unordered_map>
 #include <absl/container/flat_hash_map.h>
+#include <absl/container/flat_hash_set.h>
+
 
 /**
  * ## Thoughrs For PIBT
@@ -152,69 +154,85 @@ void HorizonPairDB::generate_mdds() {
   std::cout << "Num of MDDs  : " << mdd_count << std::endl;
 }
 
+uint8_t HorizonPairDB::get_conflict_penalty(MDD& mdd1, MDD& mdd2) {
+  return 1;
+}
 
 
-void HorizonPairDB::generate_conflicting_pairs() {
-    // size_t V_SIZE = G->V.size();
-    // size_t N = V_SIZE * V_SIZE; // Total number of possible agents
-    
-    // // The Generation Array: heavily cache-optimized O(1) deduplication.
-    // // seen_by[b] = a means "Agent b has already been recorded as conflicting with Agent a"
-    // // This entirely eliminates the need to clear arrays or use std::find/std::unordered_set.
-    // std::vector<int> seen_by(N, -1); 
-    
-    // uint64_t total_unique_pairs = 0;
+void HorizonPairDB::generate_conflicts() {
+  const int INIT_TIME = 1; // don't consider t=0 as a conflict
+  conflicts.resize(mdd_count);
+  std::atomic<long long> num_of_conflicts = 0;
 
-    // const int bar_width = 40;
-    // auto print_bar = [&](size_t done) {
-    //     float frac = N > 0 ? (float)done / (float)N : 1.0f;
-    //     int filled = (int)(frac * bar_width);
-    //     std::cout << "\r[";
-    //     for (int k = 0; k < bar_width; ++k) std::cout << (k < filled ? '#' : '-');
-    //     std::cout << "] " << std::fixed << std::setprecision(2) << (frac * 100.0f) << "%"
-    //               << " pairs: " << total_unique_pairs << std::flush;
-    // };
+  std::mutex io_mtx; // Protects console progress bar output
+  const long long total = (long long)mdd_count;
+  std::atomic<long long> done = 0;
+  const int bar_width = 40;
 
-    // // Iterate agent by agent
-    // for (int a = 0; a < N; ++a) {
-    //     print_bar(a);
-    //     MDD* mdd_a = &mdd_id_by_agent[a];
+  auto print_bar = [&]() {
+    std::lock_guard lock(io_mtx);
+    float frac = total > 0 ? (float)done.load() / (float)total : 1.0f;
+    int filled = (int)(frac * bar_width);
+    std::cout << "\r[";
+    for (int k = 0; k < bar_width; ++k) std::cout << (k < filled ? '#' : '-');
+    std::cout << "] " << std::fixed << std::setprecision(2) << (frac * 100.0f) << "%" << std::flush;
+  };
+
+  print_bar();
+
+  ThreadPool pool(NUM_OF_THREADS);
+
+  // Maps each worker thread to a fixed slot so it can reuse its own 'visited' vector.
+  std::unordered_map<std::thread::id, int> thread_slot;
+  for (int i = 0; i < (int)pool.workers.size(); i++)
+    thread_slot[pool.workers[i].get_id()] = i;
+
+  // One 'visited' vector per thread, pre-allocated and reused across mdd_ids.
+  std::vector<std::vector<bool>> visited_per_thread(
+      pool.workers.size(), std::vector<bool>(mdd_count, false));
+
+  // Task processes a SINGLE mdd_id. conflicts[mdd_id] is only ever written by
+  // this task, so no lock is needed for it.
+  auto task = [&](uint32_t mdd_id) {
+    std::vector<bool>& visited = visited_per_thread[thread_slot.at(std::this_thread::get_id())];
+    std::fill(visited.begin(), visited.end(), false);
+
+    MDD& mdd = mdd_by_id[mdd_id];
+    for (int t = INIT_TIME; t <= HORIZON; t++) {
+      for (Vertex* v : mdd.frontiers[t]) {
         
-    //     // Skip if agent 'a' has no valid MDD 
-    //     if (mdd_a->frontiers.empty()) continue; 
+        size_t t_s = static_cast<size_t>(t) * G->V.size() + v->id;
+        
+        for (uint32_t other_mdd_id : mdd_by_t_s[t_s]) {
+          if (other_mdd_id <= mdd_id) continue;
+          
+          if (visited[other_mdd_id]) continue;
+          visited[other_mdd_id] = true;
 
-    //     // Trace Agent A's path through space-time
-    //     for (int t = 0; t < mdd_a->frontiers.size(); ++t) {
-    //         for (Vertex* v : mdd_a->frontiers[t]) {
-    //             int idx = t * V_SIZE + v->id;
-                
-    //             // Look at all other agents sharing this exact (v, t)
-    //             for (MDD* mdd_b : mdd_by_t_s[idx]) {
-    //                 int b = mdd_b->agent_id;
-                    
-    //                 // Decode IDs back to graph vertices
-    //                 int v_a = a / V_SIZE;
-    //                 int g_a = a % V_SIZE;
-    //                 int v_b = b / V_SIZE;
-    //                 int g_b = b % V_SIZE;
+          MDD& other_mdd = mdd_by_id[other_mdd_id];
+          uint8_t penalty = get_conflict_penalty(mdd, other_mdd);
+          
+          if (penalty > 0) {
+            conflicts[mdd_id][other_mdd_id] = penalty;
+            num_of_conflicts++;
+          }
+        }
+      }
+    }
 
-    //                 // Reject physically impossible MAPF states
-    //                 if (v_a == v_b || g_a == g_b) continue;
+    ++done;
+    print_bar();
+  };
 
-    //                 // Strict ordering (b > a) prevents counting both (A,B) and (B,A).
-    //                 // seen_by[b] != a prevents counting (A,B) twice if they 
-    //                 // collide at multiple different time steps.
-    //                 if (b > a && seen_by[b] != a) {
-    //                     seen_by[b] = a; 
-    //                     total_unique_pairs++;
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
+  std::vector<std::future<ThreadResult>> futures;
+  futures.reserve(mdd_count);
+  for (uint32_t mdd_id = 0; mdd_id < mdd_count; mdd_id++)
+    futures.push_back(pool.submit([&task, mdd_id]() { task(mdd_id); return ThreadResult{}; }));
 
-    // std::cout << std::endl;
-    // std::cout << "Unique conflicting pairs: " << total_unique_pairs << "\n";
+  for (auto& fut : futures) fut.get();
+
+  print_bar(); // Final 100% update
+  std::cout << "\nNum of conflicts: " << num_of_conflicts.load() << std::endl;
 }
 
 void HorizonPairDB::interactive_mdd_test() {
