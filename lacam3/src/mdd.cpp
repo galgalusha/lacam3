@@ -45,7 +45,6 @@ void MDD::populate(DistTable* D, Vertex* v_i, Vertex* v_g, int horizon) {
 
 
 void MDD::render(Instance* ins) {
-  int i = agent_id;
   using namespace drawing_detail;
   const Graph* G = ins->G;
   const int W = G->width;
@@ -68,7 +67,7 @@ void MDD::render(Instance* ins) {
       if (it == depth_of.end()) {
         std::cout << (G->U[idx] ? '.' : '#');
       } else {
-        std::cout << COLORS[i % NUM_COLORS] << (it->second % 10) << RESET;
+        std::cout << COLORS[frontiers[0][0]->id % NUM_COLORS] << (it->second % 10) << RESET;
       }
     }
     std::cout << '\n';
