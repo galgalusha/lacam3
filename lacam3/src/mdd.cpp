@@ -231,6 +231,7 @@ void MDD::test_joint_mdd2() {
   std::vector<std::string> grid = {
     ".@.",
     "...",
+    "...",
   };
   Graph* G = new Graph(grid);
   DistTable* D = create_dist_table(G);
@@ -252,15 +253,20 @@ void MDD::test_joint_mdd2() {
   auto D_start = A_goal; // swap conflict with A
   auto D_goal  = A_start;
 
+  auto E_start = coord(1, 1);
+  auto E_goal = E_start;
+
   MDD mdd_A;
   MDD mdd_B;
   MDD mdd_C;
   MDD mdd_D;
+  MDD mdd_E;
 
   mdd_A.populate(D, A_start, A_goal, 5);
   mdd_B.populate(D, B_start, B_goal, 5);
   mdd_C.populate(D, C_start, C_goal, 5);
   mdd_D.populate(D, D_start, D_goal, 5);
+  mdd_E.populate(D, E_start, E_goal, 5);
 
   bool actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B, G);
   bool expected_conflict = false;
@@ -283,6 +289,14 @@ void MDD::test_joint_mdd2() {
 
   if (actual_conflict != expected_conflict) {
     std::cout << "Failed to detect a conflict between A and D" << std::endl;
+    exit(0);
+  }
+
+  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_E, G);
+  expected_conflict = true;
+
+  if (actual_conflict != expected_conflict) {
+    std::cout << "Failed to detect a conflict between A and E" << std::endl;
     exit(0);
   }
 
