@@ -154,19 +154,27 @@ void HorizonPairDB::generate_mdds() {
   std::cout << "Num of MDDs  : " << mdd_count << std::endl;
 }
 
+
 uint8_t HorizonPairDB::get_conflict_penalty(MDD& mdd1, MDD& mdd2) {
-  return 1;
+  if (!mdd1.check_joint_mdd_conflict(mdd2, G))
+    return 0;
+  MDD mdd1_with_wait = mdd1.get_mdd_with_wait();
+  if (mdd1_with_wait.check_joint_mdd_conflict(mdd2, G))
+    return 2;
+  else
+    return 1;
 }
 
 
 void HorizonPairDB::generate_conflicts() {
   const int INIT_TIME = 1; // don't consider t=0 as a conflict
   conflicts.resize(mdd_count);
-  std::atomic<long long> num_of_conflicts = 0;
+  std::atomic<uint32_t> num_of_conflicts1 = 0;
+  std::atomic<uint32_t> num_of_conflicts2 = 0;
 
   std::mutex io_mtx; // Protects console progress bar output
-  const long long total = (long long)mdd_count;
-  std::atomic<long long> done = 0;
+  const uint32_t total = mdd_count;
+  std::atomic<uint32_t> done = 0;
   const int bar_width = 40;
 
   auto print_bar = [&]() {
@@ -214,7 +222,10 @@ void HorizonPairDB::generate_conflicts() {
           
           if (penalty > 0) {
             conflicts[mdd_id][other_mdd_id] = penalty;
-            num_of_conflicts++;
+            if (penalty == 1)
+              num_of_conflicts1++;
+            else
+              num_of_conflicts2++;
           }
         }
       }
@@ -232,7 +243,8 @@ void HorizonPairDB::generate_conflicts() {
   for (auto& fut : futures) fut.get();
 
   print_bar(); // Final 100% update
-  std::cout << "\nNum of conflicts: " << num_of_conflicts.load() << std::endl;
+  std::cout << "\nNum of conflicts with penalty 1: " << num_of_conflicts1.load() << std::endl;
+  std::cout << "Num of conflicts with penalty 2: " << num_of_conflicts2.load() << std::endl;
 }
 
 void HorizonPairDB::interactive_mdd_test() {

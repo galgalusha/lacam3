@@ -227,12 +227,13 @@ int main(int argc, char *argv[])
     // PIBT::pair_db->load_all2(&ins);
   }
 
-//   HorizonPairDB db(ins.G);
-//   db.generate_mdds();
-//   db.generate_conflicts();
-//   exit(0);
-  MDD::test_joint_mdd();
-  MDD::test_joint_mdd2();
+  HorizonPairDB db(ins.G);
+  db.generate_mdds();
+  db.generate_conflicts();
+//   MDD::test_joint_mdd();
+//   MDD::test_joint_mdd2();
+//   MDD::test_joint_mdd_with_wait();
+//   MDD::test_joint_mdd_with_wait2();
   exit(0);
 
 
