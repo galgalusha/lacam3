@@ -58,10 +58,12 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
   bool success = true;
 
   // Clear previous agent t_v registrations
-  for (size_t t_v : dirty_t_v_vectors) {
-    agents_by_t_v[t_v].clear();
+  if (pair_db != nullptr) { 
+    for (size_t t_v : dirty_t_v_vectors) {
+      agents_by_t_v[t_v].clear();
+    }
+    dirty_t_v_vectors.clear();  
   }
-  dirty_t_v_vectors.clear();  
 
   // setup cache & constraints check
   for (auto i = 0; i < N; ++i) {
@@ -86,11 +88,13 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
   }
 
   // Perform initial registration for all agents
-  for (int j = 0; j < N; ++j) {
-    Vertex* v = Q_to[j] != nullptr ? Q_to[j] : Q_from[j];
-    uint32_t mdd_id = get_mdd_id(v->id, goals[j]->id);
-    register_agent_mdd(j, mdd_id);
-  }  
+  if (pair_db != nullptr) { 
+    for (int j = 0; j < N; ++j) {
+      Vertex* v = Q_to[j] != nullptr ? Q_to[j] : Q_from[j];
+      uint32_t mdd_id = get_mdd_id(v->id, goals[j]->id);
+      register_agent_mdd(j, mdd_id);
+    } 
+  }
 
   if (success) {
     for (auto i : order) {
@@ -254,12 +258,12 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
     // reserve next location
     occupied_next[u->id] = i;
     Q_to[i] = u;
-    register_agent_mdd(i, get_mdd_id(u->id, goals[i]->id));
+    if (pair_db != nullptr) register_agent_mdd(i, get_mdd_id(u->id, goals[i]->id));
 
     // priority inheritance
     if (j != NO_AGENT && u != Q_from[i] && Q_to[j] == nullptr && !funcPIBT(j, Q_from, Q_to)) {
-      occupied_next[u->id] = NO_AGENT;
-      Q_to[i] = nullptr;
+      // occupied_next[u->id] = NO_AGENT;
+      // Q_to[i] = nullptr;
       continue;
     }
 
