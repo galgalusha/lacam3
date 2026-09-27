@@ -14,7 +14,7 @@
 
 
 /**
- * ## Thoughrs For PIBT
+ * ## Thoughts For PIBT
  * For an agent i, we need to find every agent j that has a conflict within the horizon.
  * Suppose horizon=5. The MDD of agent i contains thousands of possible conflicts in
  * the DB. Iterating them is not a good option. Iterating through all agents j for every
@@ -44,7 +44,7 @@ static DistTable* create_dist_table(Graph* G) {
   return D;
 }
 
-HorizonPairDB::HorizonPairDB(Graph* _G) : G(_G), D(create_dist_table(G)) {}
+HorizonPairDB::HorizonPairDB(Graph* _G) : G(_G), D(create_dist_table(G)), V_SIZE(_G->V.size()) {}
 
 
 void HorizonPairDB::generate_mdds() {
@@ -167,7 +167,6 @@ uint8_t HorizonPairDB::get_conflict_penalty(MDD& mdd1, MDD& mdd2) {
 
 
 void HorizonPairDB::generate_conflicts() {
-  const int INIT_TIME = 1; // don't consider t=0 as a conflict
   conflicts.resize(mdd_count);
   std::atomic<uint32_t> num_of_conflicts1 = 0;
   std::atomic<uint32_t> num_of_conflicts2 = 0;
@@ -206,26 +205,39 @@ void HorizonPairDB::generate_conflicts() {
     std::fill(visited.begin(), visited.end(), false);
 
     MDD& mdd = mdd_by_id[mdd_id];
-    for (int t = INIT_TIME; t <= HORIZON; t++) {
+    for (int t = 0; t <= HORIZON; t++) {
       for (Vertex* v : mdd.frontiers[t]) {
         
+        int NUM_OF_MULTI_SETS = 1;
+        std::vector<uint32_t>* multiset_of_mdd_ids[2]; 
         size_t t_s = static_cast<size_t>(t) * G->V.size() + v->id;
+        multiset_of_mdd_ids[0] = &mdd_by_t_s[t_s];
         
-        for (uint32_t other_mdd_id : mdd_by_t_s[t_s]) {
-          if (other_mdd_id <= mdd_id) continue;
-          
-          if (visited[other_mdd_id]) continue;
-          visited[other_mdd_id] = true;
+        if (t < HORIZON) {
+          NUM_OF_MULTI_SETS++;
+          size_t t_plus_1_s = static_cast<size_t>(t + 1) * G->V.size() + v->id;
+          multiset_of_mdd_ids[1] = &mdd_by_t_s[t_plus_1_s];
+        }
+        
+        for (int k = 0; k < NUM_OF_MULTI_SETS; k++) {
+          std::vector<uint32_t>& mdd_set = *multiset_of_mdd_ids[k];
 
-          MDD& other_mdd = mdd_by_id[other_mdd_id];
-          uint8_t penalty = get_conflict_penalty(mdd, other_mdd);
-          
-          if (penalty > 0) {
-            conflicts[mdd_id][other_mdd_id] = penalty;
-            if (penalty == 1)
-              num_of_conflicts1++;
-            else
-              num_of_conflicts2++;
+          for (uint32_t other_mdd_id : mdd_set) {
+            if (other_mdd_id <= mdd_id) continue;
+            
+            if (visited[other_mdd_id]) continue;
+            visited[other_mdd_id] = true;
+
+            MDD& other_mdd = mdd_by_id[other_mdd_id];
+            uint8_t penalty = get_conflict_penalty(mdd, other_mdd);
+            
+            if (penalty > 0) {
+              conflicts[mdd_id][other_mdd_id] = penalty;
+              if (penalty == 1)
+                num_of_conflicts1++;
+              else
+                num_of_conflicts2++;
+            }
           }
         }
       }
@@ -296,3 +308,68 @@ void HorizonPairDB::interactive_mdd_test() {
   }
 }
 
+
+void HorizonPairDB::test_db_1() {
+  std::cout << "Running test_db_1" << std::endl;
+  std::vector<std::string> grid = {
+    ".@.",
+    "...",
+    "...",
+  };
+  Graph* G = new Graph(grid);
+  HorizonPairDB DB(G);
+  DB.generate_mdds();
+  DB.generate_conflicts();
+
+  auto coord = [G](int row, int col) {
+    auto index = G->width * row + col;
+    return G->U[index];
+  };
+
+  auto A_start = coord(0, 0);
+  auto A_goal  = coord(1, 2);
+
+  auto B_start = coord(1, 0);
+  auto B_goal  = coord(0, 2);
+
+  auto C_start = coord(1, 0);
+  auto C_goal  = coord(1, 1);
+
+  auto D_start = A_goal; // swap conflict with A
+  auto D_goal  = A_start;
+
+  int actual_penalty;
+  int expected_penalty;
+
+  //
+  // Test A, B
+  //
+  expected_penalty = 0;
+  actual_penalty = DB.get_penalty(A_start->id, A_goal->id, B_start->id, B_goal->id);
+  if (expected_penalty != actual_penalty) {
+    std::cout << "Got penalty != 0 for A and B" << std::endl;
+    exit(0);
+  }
+
+  //
+  // Test A, C
+  //
+  expected_penalty = 2;
+  actual_penalty = DB.get_penalty(A_start->id, A_goal->id, C_start->id, C_goal->id);
+  if (expected_penalty != actual_penalty) {
+    std::cout << "Got penalty != 2 for A and C" << std::endl;
+    exit(0);
+  }
+
+  //
+  // Test A, D
+  //
+  expected_penalty = 2;
+  actual_penalty = DB.get_penalty(A_start->id, A_goal->id, D_start->id, D_goal->id);
+  if (expected_penalty != actual_penalty) {
+    std::cout << "Got penalty != 2 for A and D" << std::endl;
+    exit(0);
+  }
+
+  delete G;
+}

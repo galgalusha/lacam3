@@ -234,6 +234,7 @@ int main(int argc, char *argv[])
 //   MDD::test_joint_mdd2();
 //   MDD::test_joint_mdd_with_wait();
 //   MDD::test_joint_mdd_with_wait2();
+//   HorizonPairDB::test_db_1();
   exit(0);
 
 

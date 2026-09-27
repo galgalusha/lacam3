@@ -8,6 +8,7 @@ struct HorizonPairDB {
   static const int HORIZON;
   Graph* G;
   DistTable* D;
+  size_t V_SIZE;
 
   HorizonPairDB(Graph* _G);
 
@@ -40,4 +41,17 @@ struct HorizonPairDB {
   // indefinitely until the process is killed.
   void interactive_mdd_test();
 
+  inline uint8_t get_penalty(int v1, int g1, int v2, int g2) {
+    int agent1 = v1 * V_SIZE + g1;
+    int agent2 = v2 * V_SIZE + g2;
+    uint32_t mdd_id1 = mdd_id_by_agent[agent1];
+    uint32_t mdd_id2 = mdd_id_by_agent[agent2];
+    int min_mdd_id = mdd_id1 < mdd_id2 ? mdd_id1 : mdd_id2;
+    int max_mdd_id = mdd_id1 > mdd_id2 ? mdd_id1 : mdd_id2;
+    auto& map = conflicts[min_mdd_id];
+    auto entry = map.find(max_mdd_id);
+    return entry == map.end() ? 0 : entry->second;
+  }
+
+  static void test_db_1();
 };
