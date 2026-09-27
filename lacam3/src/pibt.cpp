@@ -9,11 +9,6 @@ const double DH_WEIGHT = 0.01;
 const double RANDOM_TIE_WEIGHT = 0.1;
 const double TRAPPED_PENALTY = INT_MAX;
 
-const double WEIGHT_PRIORITIZED = 2.50;
-const double WEIGHT_GOOD_MOVE   = 2.00;
-const double WEIGHT_WAIT        = 1.50;
-const double WEIGHT_BAD_MOVE    = 1.00;
-
 static const double RADIUS_DECAY[] = {
     1.0,                // r = 0 (failsafe)
     1.0,                // r = 1
@@ -21,15 +16,6 @@ static const double RADIUS_DECAY[] = {
     0.5,                // r = 3
     0.25,               // r = 4
 };
-
-const double RISK_NUM_TO_PROB[6] = { 1.0, 0.8, 0.6, 0.4, 0.2, 0.0 };
-// const double RISK_NUM_TO_PROB[6] = { 7.0, 0.5, 0.25, 0.1, 0.0, 0.0 };
-
-// avg SoC=76.3 with gamma^2 and these params
-// const double WEIGHT_PRIORITIZED = 2.50;
-// const double WEIGHT_GOOD_MOVE   = 2.00;
-// const double WEIGHT_WAIT        = 1.50;
-// const double WEIGHT_BAD_MOVE    = 1.00;
 
 const double BASE_DISCOUNT      = 0.50;
 
@@ -47,15 +33,12 @@ PIBT::PIBT(const Graph *_G, Config _goals, DistTable *_D, int seed, bool _flg_sw
       occupied_next(V_size, NO_AGENT),
       C_next(N, std::array<Vertex *, 5>()),
       tie_breakers(V_size, 0),
-      oracle_tie_breakers(N),
       dh_values(V_size, 0),
       flg_swap(_flg_swap),
       scatter(_scatter),
-      pair_distances(N*N),
       radial_neighbors(G->V.size())
 {
   if (pair_db) setup_pair_db();
-  record_dh_errors = false;
 }
 
 PIBT::~PIBT() {
@@ -86,8 +69,7 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
                           const std::vector<int> &order)
 {
   bool success = true;
-  pair_distances.assign(N * N,  -1);
-  dh_prediction_cache.clear();
+
   // setup cache & constraints check
   for (auto i = 0; i < N; ++i) {
     // set occupied now
@@ -110,16 +92,6 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
     }
   }
 
-  if (FIXED_TIE) {
-    for (auto i = 0; i < N; i++) {
-      auto neighbors = Q_from[i]->neighbor;
-      oracle_tie_breakers[i].clear();
-      for (Vertex* u : neighbors) {
-        oracle_tie_breakers[i][u->id] = RANDOM_TIE_WEIGHT * get_random_float(MT);
-      }      
-    }
-  }
-
   if (success) {
     for (auto i : order) {
       if (Q_to[i] == nullptr && !funcPIBT(i, Q_from, Q_to)) {
@@ -128,8 +100,6 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
       }
     }
   }
-
-  if (success) evaluate_dh_predictions(Q_from, Q_to);
 
   // cleanup
   for (auto i = 0; i < N; ++i) {
@@ -140,130 +110,6 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
   return success;
 }
 
-double PIBT::get_congestion(Vertex* v) {
-  const auto& neighbors = radial_neighbors[v->id];
-  if (neighbors.empty()) return 0.0;
-  int occupied = 0;
-  for (Vertex* u : neighbors) {
-    if (occupied_now[u->id] != NO_AGENT) occupied++;
-  }
-  return (double)occupied / (double)neighbors.size();
-}
-
-int PIBT::get_move_risk(int j, Vertex* u_j, const Config& Q_to, int agent_i) {
-  int risk = 0;
-  
-  // Check the cell itself
-  int k = occupied_now[u_j->id];
-  if (k != NO_AGENT && k != j && k != agent_i && Q_to[k] == nullptr) risk++; 
-  
-  // Check neighbors
-  for (auto u_k : u_j->neighbor) {
-    k = occupied_now[u_k->id];
-    if (k != NO_AGENT && k != j && k != agent_i && Q_to[k] == nullptr) risk++;
-  }
-  return risk;
-}
-
-PIBT::FuturePenalty PIBT::get_future_penalty(const int agent_i, const int j, Vertex* u_i, Vertex* u_j, const Config& Q_from, const Config& Q_to)
-{
-  // Scatter
-  Vertex *j_scatter = nullptr;
-  if (scatter != nullptr) {
-    auto itr_s = scatter->scatter_data[j].find(Q_from[j]->id);
-    if (itr_s != scatter->scatter_data[j].end()) {
-      j_scatter = itr_s->second;
-    }
-  }
-
-  FuturePenalty res;
-
-  int K = 0; // num of neighbors
-
-  // wait is possible if agent j is not pushed by agent i
-  if (u_i != u_j) C_next[j][K++] = u_j;
-
-  for (auto u_j_maybe : Q_from[j]->neighbor) {
-    ///
-    /// filtering invalid moves
-    /// 
-    // 1. Vertex collision with i: j cannot move to the cell i is claiming
-    if (u_j_maybe == u_i) continue; 
-    // 2. True Swap Conflict: only applies if they are exchanging places
-    if (u_i == u_j && u_j_maybe == Q_from[agent_i]) continue; 
-    // vertex collision
-    if (occupied_next[u_j_maybe->id] != NO_AGENT) continue; 
-    // swap conflict with agent k
-    int agent_k = occupied_now[u_j_maybe->id];
-    if (agent_k != NO_AGENT && Q_to[agent_k] == u_j) continue; 
-    ///
-    /// the move is valid
-    ///
-    C_next[j][K++] = u_j_maybe;
-  }
-
-  // j is forced to wait
-  if (K == 0) {
-    return FuturePenalty(TRAPPED_PENALTY);
-  }
-
-  if (K == 1) {    
-    return FuturePenalty(pair_db->get(agent_i, j, u_i, C_next[j][0]));
-  }
-
-  double good_moves_sum = 0;
-  double good_moves_count = 0;
-  double good_moves_and_wait_sum = 0;
-  double good_moves_and_wait_count = 0;
-  double dh_wait = (u_i == u_j) 
-          ? pair_db->get(agent_i, j, Q_from[agent_i], u_j)
-          : pair_db->get(agent_i, j, u_i, u_j);
-  int dh_min = INT_MAX;
-
-  int D_wait = D->get(j, u_j);
-
-  for (int v_idx = 0; v_idx < K; v_idx++) {
-    Vertex* v = C_next[j][v_idx];
-    double dh = pair_db->get(agent_i, j, u_i, v);
-
-    bool is_good_move = (v == j_scatter) || (D->get(j, v) < D_wait);
-    bool is_wait = (v == u_j);
-
-    if (is_good_move) {
-      good_moves_sum += dh; good_moves_count++;
-      good_moves_and_wait_sum += dh; good_moves_and_wait_count++;
-    }
-    else if (is_wait) { good_moves_and_wait_sum += dh; good_moves_and_wait_count++; }
-
-    if (dh < dh_min) dh_min = dh;
-  }
-
-  res.dh1 = good_moves_count > 0 ? good_moves_sum / good_moves_count : dh_wait;
-  res.dh3 = good_moves_and_wait_count > 0 ? good_moves_and_wait_sum / good_moves_and_wait_count : dh_wait;
-  res.dh_min = dh_min;
-  return res;           
-}
-
-bool PIBT::is_surely_zero(const int agent_i, const int j, Vertex* u_i, Vertex* u_j, const Config& Q_from, const Config& Q_to)
-{
-  // wait is possible if agent j is not pushed by agent i
-  if (u_i != u_j) {
-    if (pair_db->get(agent_i, j, u_i, u_j) != 0) return false;
-  }
-  if (u_i == u_j) {
-    if (pair_db->get(agent_i, j, Q_from[agent_i], u_j) != 0) return false;
-  }
-
-  for (auto u_j_maybe : Q_from[j]->neighbor) {
-    if (u_j_maybe == u_i) continue;
-    if (u_i == u_j && u_j_maybe == Q_from[agent_i]) continue;
-    if (occupied_next[u_j_maybe->id] != NO_AGENT) continue;
-    int agent_k = occupied_now[u_j_maybe->id];
-    if (agent_k != NO_AGENT && Q_to[agent_k] == u_j) continue;
-    if (pair_db->get(agent_i, j, u_i, u_j_maybe) != 0) return false;
-  }
-  return true;
-}
 
 void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to, const int start)
 {
@@ -288,36 +134,10 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
       j = occupied_now[u_j->id];
       if (j != NO_AGENT && j != i && Q_to[j] == nullptr) {
         double expected_penalty;
-        if (r == 1) {
-          if (record_dh_errors && is_surely_zero(i, j, u_i, u_j, Q_from, Q_to)) {
-            expected_penalty = 0;
-          } else {
-        FuturePenalty fp = get_future_penalty(i, j, u_i, u_j, Q_from, Q_to);
-            expected_penalty = fp.dh1;            
-            if (record_dh_errors) {
-              int wait_penalty = (u_i == u_j)
+        int wait_penalty = (u_i == u_j)
                 ? pair_db->get(i, j, Q_from[i], u_j)
                 : pair_db->get(i, j, u_i      , u_j);
-              auto& rec = dh_prediction_cache[dh_cache_key(i, j)][k];
-              rec.u_i = u_i;
-              rec.has_future = true;
-              rec.future_dh[0] = fp.dh1;
-              rec.future_dh[1] = fp.dh2;
-              rec.future_dh[2] = fp.dh3;
-              rec.future_dh[3] = fp.dh4;
-              rec.future_dh[4] = fp.dh5;
-              rec.future_dh[5] = fp.dh6;
-              rec.future_dh[6] = fp.dh7;
-              rec.has_wait = true;
-              rec.wait_dh = wait_penalty;
-            }
-          }
-        } else {
-          int wait_penalty = (u_i == u_j)
-                  ? pair_db->get(i, j, Q_from[i], u_j)
-                  : pair_db->get(i, j, u_i      , u_j);
-          expected_penalty = r_scale * wait_penalty * BASE_DISCOUNT;
-        }
+        expected_penalty = r_scale * wait_penalty * BASE_DISCOUNT;
         if (expected_penalty > max_penalty) max_penalty = expected_penalty;
         total_penalty += expected_penalty;
       }
@@ -341,22 +161,14 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
     }
   }
 
-  // set C_next
-  auto get_tb = [&](Vertex* v) -> double {
-    if (FIXED_TIE) 
-      return (v == Q_from[i]) ? 0 : oracle_tie_breakers[i][v->id];
-    double tb = RANDOM_TIE_WEIGHT * get_random_float(MT);
-    tie_breakers[v->id] = tb;
-    return tb;
-  };
   for (size_t k = 0; k < K; ++k) {
     auto u = Q_from[i]->neighbor[k];
     C_next[i][k] = u;
-    tie_breakers[u->id] = get_tb(u);
+    tie_breakers[u->id] = RANDOM_TIE_WEIGHT * get_random_float(MT);
     dh_values[u->id] = 0;
   }
   C_next[i][K] = Q_from[i];
-  tie_breakers[Q_from[i]->id] = 0; // get_tb(Q_from[i]);
+  tie_breakers[Q_from[i]->id] = 0;
   dh_values[Q_from[i]->id] = 0;
 
 
@@ -396,9 +208,9 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
 
   // main loop
   for (size_t k = 0; k < K + 1; ++k) {
-    // 1. Evaluate ties and sort FIRST
+    // Lazy dh values evaluation (and re-sorting)
     if (!dh_filled && k < K && C_next[i][k] != prioritized_vertex &&
-        D->get(i, C_next[i][k]->id) == D->get(i, C_next[i][k + 1]->id)) {
+      D->get(i, C_next[i][k]->id) == D->get(i, C_next[i][k + 1]->id)) {
       
       fill_dh_values(i, C_next[i], K + 1, Q_from, Q_to, k);
       
@@ -444,148 +256,6 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
   return false;
 }
 
-void PIBT::evaluate_dh_predictions(const Config &Q_from, const Config &Q_to)
-{
-  if (!record_dh_errors) return;
-  static const double FUTURE_BUCKET_EDGES[] = {0.25, 0.5, 1.0, 2.0, 3.0, 4.0,
-                                                5.0,  6.0, 7.0, 8.0, 9.0, 10.0};
-  constexpr int NUM_EDGES = sizeof(FUTURE_BUCKET_EDGES) / sizeof(FUTURE_BUCKET_EDGES[0]);
-  static const double CONGESTION_BUCKET_EDGES[] = {0.25, 0.5, 0.75};
-
-  for (auto &kv : dh_prediction_cache) {
-    const int i = (int)(kv.first / N);
-    const int j = (int)(kv.first % N);
-    for (auto &rec : kv.second) {
-      if (rec.u_i == nullptr || rec.u_i != Q_to[i]) continue;
-      const double actual = pair_db->get(i, j, Q_to[i], Q_to[j]);
-
-      if (rec.has_future) {
-        const double err = std::abs(actual - rec.future_dh[0]);
-        int b = NUM_EDGES;  // overflow bucket (>= 10)
-        for (int e = 0; e < NUM_EDGES; ++e) {
-          if (err < FUTURE_BUCKET_EDGES[e]) { b = e; break; }
-        }
-        future_error_buckets[b]++;
-
-        const double congestion = get_congestion(Q_from[j]);
-        int cb = NUM_CONGESTION_BUCKETS - 1;  // overflow bucket (>= 0.75)
-        for (int e = 0; e < NUM_CONGESTION_BUCKETS - 1; ++e) {
-          if (congestion < CONGESTION_BUCKET_EDGES[e]) { cb = e; break; }
-        }
-
-        if (b < NUM_BREAKDOWN_ERROR_BUCKETS) {
-          const bool was_wait = (Q_to[j] == Q_from[j]);
-          congestion_table[was_wait][b][cb]++;
-        }
-
-        for (int v = 0; v < NUM_DH_VARIANTS; ++v) {
-          const double v_err = std::abs(actual - rec.future_dh[v]);
-          future_congestion_table_025[v][v_err > 0.25][cb]++;
-          future_congestion_table_05[v][v_err > 0.5][cb]++;
-        }
-      }
-
-      if (rec.has_wait) {
-        const int err = std::abs((int)actual - rec.wait_dh);
-        const int b = (err <= 10) ? err : NUM_WAIT_ERROR_BUCKETS - 1;
-        wait_error_buckets[b]++;
-
-        const bool is_error = (err > 0);
-        const double congestion = get_congestion(Q_from[j]);
-        int cb = NUM_CONGESTION_BUCKETS - 1;  // overflow bucket (>= 0.75)
-        for (int e = 0; e < NUM_CONGESTION_BUCKETS - 1; ++e) {
-          if (congestion < CONGESTION_BUCKET_EDGES[e]) { cb = e; break; }
-        }
-        wait_congestion_table[is_error][cb]++;
-      }
-    }
-  }
-}
-
-void PIBT::print_dh_error_buckets()
-{
-  static const double FUTURE_BUCKET_EDGES[] = {0.0,  0.25, 0.5, 1.0, 2.0, 3.0, 4.0,
-                                                5.0,  6.0,  7.0, 8.0, 9.0, 10.0};
-  constexpr int NUM_EDGES = sizeof(FUTURE_BUCKET_EDGES) / sizeof(FUTURE_BUCKET_EDGES[0]);
-
-  std::cout << "=== future_dh prediction |error| buckets ===" << std::endl;
-  for (int b = 0; b < NUM_EDGES - 1; ++b) {
-    std::cout << "  [" << FUTURE_BUCKET_EDGES[b] << ", " << FUTURE_BUCKET_EDGES[b + 1]
-               << "): " << future_error_buckets[b] << std::endl;
-  }
-  std::cout << "  [" << FUTURE_BUCKET_EDGES[NUM_EDGES - 1] << ", inf): "
-             << future_error_buckets[NUM_FUTURE_ERROR_BUCKETS - 1] << std::endl;
-
-  std::cout << "=== wait_dh prediction |error| buckets ===" << std::endl;
-  for (int b = 0; b <= 10; ++b) {
-    std::cout << "  " << b << ": " << wait_error_buckets[b] << std::endl;
-  }
-  std::cout << "  >10: " << wait_error_buckets[NUM_WAIT_ERROR_BUCKETS - 1] << std::endl;
-
-  static const char *ERROR_BUCKET_LABELS[NUM_BREAKDOWN_ERROR_BUCKETS] = {
-      "[0, 0.25)", "[0.25, 0.5)", "[0.5, 1)", "[1, 2)"};
-  static const char *CONGESTION_BUCKET_LABELS[NUM_CONGESTION_BUCKETS] = {
-      "[0, 0.25)", "[0.25, 0.5)", "[0.5, 0.75)", "[0.75, 1]"};
-
-  std::cout << "=== future error breakdown: was_wait | error | congestion | count ==="
-             << std::endl;
-  for (int was_wait = 0; was_wait < 2; ++was_wait) {
-    for (int b = 0; b < NUM_BREAKDOWN_ERROR_BUCKETS; ++b) {
-      for (int cb = 0; cb < NUM_CONGESTION_BUCKETS; ++cb) {
-        std::cout << "  " << (was_wait ? "true " : "false") << " | "
-                   << ERROR_BUCKET_LABELS[b] << " | " << CONGESTION_BUCKET_LABELS[cb]
-                   << " | " << congestion_table[was_wait][b][cb] << std::endl;
-      }
-    }
-  }
-
-  std::cout << "=== wait_dh prediction breakdown by congestion ===" << std::endl;
-  std::cout << std::left;
-  std::cout << std::setw(10) << "is_error";
-  for (int cb = 0; cb < NUM_CONGESTION_BUCKETS; ++cb) {
-    std::cout << std::setw(10) << CONGESTION_BUCKET_LABELS[cb];
-  }
-  std::cout << std::endl;
-  for (int is_error = 0; is_error < 2; ++is_error) {
-    std::cout << std::setw(10) << (is_error ? "Yes" : "No");
-    for (int cb = 0; cb < NUM_CONGESTION_BUCKETS; ++cb) {
-      std::cout << std::setw(10) << wait_congestion_table[is_error][cb];
-    }
-    std::cout << std::endl;
-  }
-
-  for (int v = 0; v < NUM_DH_VARIANTS; ++v) {
-    std::cout << "=== dh" << (v + 1) << " prediction breakdown by congestion (is_error: error > 0.25) ==="
-               << std::endl;
-    std::cout << std::setw(10) << "is_error";
-    for (int cb = 0; cb < NUM_CONGESTION_BUCKETS; ++cb) {
-      std::cout << std::setw(10) << CONGESTION_BUCKET_LABELS[cb];
-    }
-    std::cout << std::endl;
-    for (int is_error = 0; is_error < 2; ++is_error) {
-      std::cout << std::setw(10) << (is_error ? "Yes" : "No");
-      for (int cb = 0; cb < NUM_CONGESTION_BUCKETS; ++cb) {
-        std::cout << std::setw(10) << future_congestion_table_025[v][is_error][cb];
-      }
-      std::cout << std::endl;
-    }
-
-    std::cout << "=== dh" << (v + 1) << " prediction breakdown by congestion (is_error: error > 0.5) ==="
-               << std::endl;
-    std::cout << std::setw(10) << "is_error";
-    for (int cb = 0; cb < NUM_CONGESTION_BUCKETS; ++cb) {
-      std::cout << std::setw(10) << CONGESTION_BUCKET_LABELS[cb];
-    }
-    std::cout << std::endl;
-    for (int is_error = 0; is_error < 2; ++is_error) {
-      std::cout << std::setw(10) << (is_error ? "Yes" : "No");
-      for (int cb = 0; cb < NUM_CONGESTION_BUCKETS; ++cb) {
-        std::cout << std::setw(10) << future_congestion_table_05[v][is_error][cb];
-      }
-      std::cout << std::endl;
-    }
-  }
-}
 
 int PIBT::is_swap_required_and_possible(const int i, const Config &Q_from,
                                         Config &Q_to)
