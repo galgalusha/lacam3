@@ -2,11 +2,8 @@
 #include <filesystem>
 #include <iostream>
 #include <lacam.hpp>
-#include <pair_wise_bin.hpp>
-#include <pair_wise_db.hpp>
 #include <drawing.hpp>
 #include <asha_planner.hpp>
-#include <pattern_db.hpp>
 #include <mdd.hpp>
 #include <horizon_pair_db.hpp>
 
@@ -27,9 +24,6 @@ int main(int argc, char *argv[])
   program.add_argument("-s", "--seed")
       .help("seed")
       .default_value(std::string("0"));
-  program.add_argument("-radius", "--radius")
-      .help("PairDB radius")
-      .default_value(std::string("3"));
   program.add_argument("-v", "--verbose")
       .help("verbose")
       .default_value(std::string("0"));
@@ -56,18 +50,18 @@ int main(int argc, char *argv[])
       .help("turn off the anytime part, i.e., usual LaCAM")
       .default_value(false)
       .implicit_value(true);
-  program.add_argument("--pair-db-gen")
-      .help("Generate PairDB Database")
-      .default_value(false)
-      .implicit_value(true);
-  program.add_argument("--pattern-db-gen")
-      .help("Generate PatternDB")
-      .default_value(false)
-      .implicit_value(true);
-  program.add_argument("--pair-db-test")
-      .help("Test PairDB Database")
-      .default_value(false)
-      .implicit_value(true);
+//   program.add_argument("--pair-db-gen")
+//       .help("Generate PairDB Database")
+//       .default_value(false)
+//       .implicit_value(true);
+//   program.add_argument("--pattern-db-gen")
+//       .help("Generate PatternDB")
+//       .default_value(false)
+//       .implicit_value(true);
+//   program.add_argument("--pair-db-test")
+//       .help("Test PairDB Database")
+//       .default_value(false)
+//       .implicit_value(true);
   program.add_argument("--random-insert-prob1")
       .help("probability of inserting the start node")
       .default_value(std::string("0.001"));
@@ -130,13 +124,10 @@ int main(int argc, char *argv[])
       std::stoi(program.get<std::string>("time_limit_sec"));
   const auto scen_name = program.get<std::string>("scen");
   const auto seed = std::stoi(program.get<std::string>("seed"));
-  const auto radius = std::stoi(program.get<std::string>("radius"));
   const auto map_name = program.get<std::string>("map");
-  const auto test_pair_db = program.get<bool>("pair-db-test");
-  const auto gen_pair_db = program.get<bool>("pair-db-gen");
-  const auto gen_pattern_db = program.get<bool>("pattern-db-gen");
+//   const auto test_pair_db = program.get<bool>("pair-db-test");
+//   const auto gen_pair_db = program.get<bool>("pair-db-gen");
   const auto asha_planner = program.get<bool>("asha");
-  const auto fixed_tie = program.get<bool>("fixed-tie");
   const auto use_pair_db = program.get<bool>("pair-db");
   if (use_pair_db && (map_name.size() < 4 || map_name.substr(map_name.size() - 4) != ".map")) {
     std::cerr << "error: map file must have a .map extension to use --pair-db" << std::endl;
@@ -180,62 +171,40 @@ int main(int argc, char *argv[])
   Planner::CHECKPOINTS_DURATION =
       std::stof(program.get<std::string>("checkpoints-duration")) * 1000;
 
-  PairWiseDB::RADIUS = radius;
-
-  if (gen_pair_db) {
-    std::cout << "\n[1] Constructing main bin files part" << std::endl;
-    PairWiseDB pwh_no_goals(ins.G, pair_db_name);
-    pwh_no_goals.construct_for_instance(ins.goals);
-    std::cout << "\n[2] Adding goals bin files" << std::endl;
-    PairWiseDB pwh_goals(ins.G, pair_db_name + "_goals");
-    pwh_goals.construct_for_instance_only_goals(ins.goals);
-    std::cout << "\n[3] Merging goals to main" << std::endl;
-    merge_goal_folder(DB_PATH + pair_db_name, DB_PATH + pair_db_name + "_goals");
-    PairWiseDB pair_db_mem(ins.G, pair_db_name);
-    std::cout << "\n[4] Loading DB to memory" << std::endl;
-    pair_db_mem.load_all(&ins);
-    std::cout << "\n[5] Writing bin2 files" << std::endl;
-    pair_db_mem.write_bin2_files();
-    std::cout << "\nDone. You can delete the bin files and leave only the bin2 files." << std::endl;
-    exit(0);
-  }
-
-  if (gen_pattern_db) {
-    std::cout << "\n[1] Loading pair DB" << std::endl;
-    auto pair_db = new PairWiseDB(ins.G, pair_db_name);
-    pair_db->load_kernels(&ins);
-    std::cout << "\n[2] Generating Pattern DB" << std::endl;
-    auto pattern_db = new PatternDB();
-    pattern_db->set_instance(&ins);
-    pattern_db->populate_from(pair_db);
-  }
-
-  PIBT::FIXED_TIE = fixed_tie;
-  if (fixed_tie) std::cout << "PIBT::FIXED_TIE=true" << std::endl;
-
-  if (test_pair_db) {
-    PairWiseDB pair_db(ins.G, pair_db_name);
-    pair_db.test_interactive(&ins);
-    // PairWiseDB::test();
-    exit(0);
-  }
-
+//   if (gen_pair_db) {
+//     std::cout << "\n[1] Constructing main bin files part" << std::endl;
+//     PairWiseDB pwh_no_goals(ins.G, pair_db_name);
+//     pwh_no_goals.construct_for_instance(ins.goals);
+//     std::cout << "\n[2] Adding goals bin files" << std::endl;
+//     PairWiseDB pwh_goals(ins.G, pair_db_name + "_goals");
+//     pwh_goals.construct_for_instance_only_goals(ins.goals);
+//     std::cout << "\n[3] Merging goals to main" << std::endl;
+//     merge_goal_folder(DB_PATH + pair_db_name, DB_PATH + pair_db_name + "_goals");
+//     PairWiseDB pair_db_mem(ins.G, pair_db_name);
+//     std::cout << "\n[4] Loading DB to memory" << std::endl;
+//     pair_db_mem.load_all(&ins);
+//     std::cout << "\n[5] Writing bin2 files" << std::endl;
+//     pair_db_mem.write_bin2_files();
+//     std::cout << "\nDone. You can delete the bin files and leave only the bin2 files." << std::endl;
+//     exit(0);
+//   }
 
   if (use_pair_db) {
-    PIBT::pair_db = new PairWiseDB(ins.G, pair_db_name);
-    PIBT::pair_db->load_kernels(&ins);
-    // PIBT::pair_db->load_all2(&ins);
+    HorizonPairDB* db = new HorizonPairDB(ins.G);
+    db->generate_mdds();
+    db->generate_conflicts();
+    PIBT::pair_db = db;
   }
 
-  HorizonPairDB db(ins.G);
-  db.generate_mdds();
-  db.generate_conflicts();
+//   HorizonPairDB db(ins.G);
+//   db.generate_mdds();
+//   db.generate_conflicts();
 //   MDD::test_joint_mdd();
 //   MDD::test_joint_mdd2();
 //   MDD::test_joint_mdd_with_wait();
 //   MDD::test_joint_mdd_with_wait2();
 //   HorizonPairDB::test_db_1();
-  exit(0);
+//   exit(0);
 
 
   // solve

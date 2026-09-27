@@ -2,8 +2,7 @@
 
 #include <cmath>
 
-PairWiseDB* PIBT::pair_db = nullptr;
-bool PIBT::FIXED_TIE = false;
+HorizonPairDB* PIBT::pair_db = nullptr;
 
 const double DH_WEIGHT = 0.01;
 const double RANDOM_TIE_WEIGHT = 0.1;
@@ -36,7 +35,9 @@ PIBT::PIBT(const Graph *_G, Config _goals, DistTable *_D, int seed, bool _flg_sw
       dh_values(V_size, 0),
       flg_swap(_flg_swap),
       scatter(_scatter),
-      radial_neighbors(G->V.size())
+      visited_token(N, 0),
+      current_evaluation_token(0),
+      agents_by_t_v((HorizonPairDB::HORIZON + 1) * _G->V.size(), std::vector<int>())   
 {
   if (pair_db) setup_pair_db();
 }
@@ -44,24 +45,10 @@ PIBT::PIBT(const Graph *_G, Config _goals, DistTable *_D, int seed, bool _flg_sw
 PIBT::~PIBT() {
 }
 
+
 void PIBT::setup_pair_db() {
   const int width = G->width;
   const int height = G->height;
-  const int r = PairWiseDB::RADIUS;
-  for (Vertex* u_i : G->V) {
-    auto& vec = radial_neighbors[u_i->id];
-    for (int dy = -r; dy <= r; ++dy) {
-      for (int dx = -r; dx <= r; ++dx) {
-        if (std::abs(dx) + std::abs(dy) > r) continue;
-        const int nx = u_i->x + dx;
-        const int ny = u_i->y + dy;
-        if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
-        Vertex* u_j = G->U[ny * width + nx];
-        if (u_j == nullptr || pair_db->D->get(u_i->id, u_j->id) > r) continue;
-        vec.push_back(u_j);
-      }
-    }
-  }
 }
 
 
@@ -69,6 +56,12 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
                           const std::vector<int> &order)
 {
   bool success = true;
+
+  // Clear previous agent t_v registrations
+  for (size_t t_v : dirty_t_v_vectors) {
+    agents_by_t_v[t_v].clear();
+  }
+  dirty_t_v_vectors.clear();  
 
   // setup cache & constraints check
   for (auto i = 0; i < N; ++i) {
@@ -91,6 +84,13 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
       occupied_next[Q_to[i]->id] = i;
     }
   }
+
+  // Perform initial registration for all agents
+  for (int j = 0; j < N; ++j) {
+    Vertex* v = Q_to[j] != nullptr ? Q_to[j] : Q_from[j];
+    uint32_t mdd_id = get_mdd_id(v->id, goals[j]->id);
+    register_agent_mdd(j, mdd_id);
+  }  
 
   if (success) {
     for (auto i : order) {
@@ -118,30 +118,45 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
     double max_penalty = 0;
     double total_penalty = 0;
 
-    for (Vertex* u_j : radial_neighbors[u_i->id]) {
-      int r = std::max(1, pair_db->D->get(u_i->id, u_j->id));
-      double r_scale = RADIUS_DECAY[r];
+    uint32_t mdd_i = get_mdd_id(u_i->id, goals[i]->id);
+    current_evaluation_token++; // Unique ID for this specific (i, u_i) evaluation
 
-      // Check for agents moving TO this cell (PART 1)
-      int j = occupied_next[u_j->id];
-      if (j != NO_AGENT && j != i) {
-        double current_penalty = r_scale * pair_db->get(i, j, u_i, u_j);
+    // this method supposed to invoke the lamda for each agent j that is registered in any (t,s) ot (t+1,s) in mdd_i
+    //
+    for_each_other_agent_overlapping_with_mdd(mdd_i, [&](int agent_j) {
+      if (i == agent_j) return;
+      if (visited_token[agent_j] == current_evaluation_token) return;
+      visited_token[agent_j] = current_evaluation_token;      
+      //
+      // Setting up agent j
+      //
+      Vertex* u_j = Q_to[agent_j];
+      bool agent_j_already_moved = true;
+      if (u_j == nullptr) { 
+        u_j = Q_from[agent_j]; 
+        agent_j_already_moved = false; 
+      }
+      //
+      // Scenario 1: Agent j moved
+      //
+      if (agent_j_already_moved) {
+        double current_penalty = pair_db->get_penalty(u_i->id, goals[i]->id, u_j->id, goals[agent_j]->id);
         if (current_penalty > max_penalty) max_penalty = current_penalty;
         total_penalty += current_penalty;
       }
-
-      // Check for agents CURRENTLY AT this cell (PART 2)
-      j = occupied_now[u_j->id];
-      if (j != NO_AGENT && j != i && Q_to[j] == nullptr) {
-        double expected_penalty;
-        int wait_penalty = (u_i == u_j)
-                ? pair_db->get(i, j, Q_from[i], u_j)
-                : pair_db->get(i, j, u_i      , u_j);
-        expected_penalty = r_scale * wait_penalty * BASE_DISCOUNT;
+      //
+      // Scenario 2: Agent j did not yet move
+      //
+      else {
+        double expected_penalty = (u_i == u_j)
+                ? pair_db->get_penalty(Q_from[i]->id, goals[i]->id, u_j->id, goals[agent_j]->id)
+                : pair_db->get_penalty(u_i->id      , goals[i]->id, u_j->id, goals[agent_j]->id);
+        expected_penalty *= BASE_DISCOUNT;
         if (expected_penalty > max_penalty) max_penalty = expected_penalty;
         total_penalty += expected_penalty;
-      }
-    }
+      }      
+    });
+
     double final_penalty = max_penalty + (total_penalty - max_penalty) * 0.25;
     // Write the final maximum penalty to the pre-allocated array
     dh_values[u_i->id] = DH_WEIGHT * final_penalty;
@@ -239,11 +254,14 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
     // reserve next location
     occupied_next[u->id] = i;
     Q_to[i] = u;
+    register_agent_mdd(i, get_mdd_id(u->id, goals[i]->id));
 
     // priority inheritance
-    if (j != NO_AGENT && u != Q_from[i] && Q_to[j] == nullptr &&
-        !funcPIBT(j, Q_from, Q_to))
+    if (j != NO_AGENT && u != Q_from[i] && Q_to[j] == nullptr && !funcPIBT(j, Q_from, Q_to)) {
+      occupied_next[u->id] = NO_AGENT;
+      Q_to[i] = nullptr;
       continue;
+    }
 
     // success to plan next one step
     if (flg_swap && k == 0) swap_operation();
@@ -338,4 +356,49 @@ bool PIBT::is_swap_possible(Vertex *v_pusher_origin, Vertex *v_puller_origin)
     v_puller = tmp;
   }
   return false;
+}
+
+void PIBT::register_agent_mdd(int agent_id, uint32_t mdd_id) {
+  MDD& mdd = pair_db->mdd_by_id[mdd_id];
+  for (int t = 0; t <= HorizonPairDB::HORIZON; t++) {
+    for (Vertex* v : mdd.frontiers[t]) {
+      size_t t_v = static_cast<size_t>(t) * V_size + v->id;
+      auto& bucket = agents_by_t_v[t_v];
+      // Prevent duplicate agent registrations in the same bucket
+      if (std::find(bucket.begin(), bucket.end(), agent_id) != bucket.end()) {
+        continue;
+      }      
+      // If this bucket is empty, mark it to be cleared later
+      if (bucket.empty()) {
+        dirty_t_v_vectors.push_back(t_v);
+      }
+      bucket.push_back(agent_id);
+    }
+  }
+}
+
+
+template <typename Func>
+void PIBT::for_each_other_agent_overlapping_with_mdd(uint32_t mdd_id, Func callback) {
+  MDD& mdd = pair_db->mdd_by_id[mdd_id];
+  
+  for (int t = 0; t <= HorizonPairDB::HORIZON; ++t) {
+    for (Vertex* v : mdd.frontiers[t]) {
+      
+      // 1. Trigger on shared vertices at time t
+      size_t t_v = static_cast<size_t>(t) * V_size + v->id;
+      for (int agent_j : agents_by_t_v[t_v]) {
+        callback(agent_j);
+      }
+      
+      // 2. Trigger on time t+1 to catch swap conflicts and follows
+      if (t + 1 <= HorizonPairDB::HORIZON) {
+        size_t t_plus_1_v = static_cast<size_t>(t + 1) * V_size + v->id;
+        for (int agent_j : agents_by_t_v[t_plus_1_v]) {
+          callback(agent_j);
+        }
+      }
+      
+    }
+  }
 }

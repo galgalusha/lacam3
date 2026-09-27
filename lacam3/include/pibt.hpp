@@ -12,30 +12,12 @@
 #include "instance.hpp"
 #include "scatter.hpp"
 #include "utils.hpp"
-#include "pair_wise_db.hpp"
+#include "horizon_pair_db.hpp"
 #include <unordered_map>
 
 struct PIBT {
 
-  struct FuturePenalty {
-    double dh1;
-    double dh2;
-    double dh3;
-    double dh4;
-    double dh5;
-    double dh6;
-    double dh7;
-    double dh_min;
-
-    double certainty;
-
-    FuturePenalty(double dh) { dh_min = dh1 = dh2 = dh3 = dh4 = dh5 = dh6 = dh7 = dh; certainty = 1.0; }    
-    FuturePenalty() { dh_min = dh1 = dh2 = dh3 = dh4 = dh5 = dh6 = dh7 = 0.0; }    
-  };
-
-
-  static PairWiseDB* pair_db;
-  static bool FIXED_TIE;
+  static HorizonPairDB* pair_db;
 
   Config goals;
   const Graph* G;
@@ -54,8 +36,6 @@ struct PIBT {
   std::vector<std::array<Vertex *, 5>> C_next;  // next location candidates
   std::vector<double> tie_breakers;              // random values, used in PIBT
   std::vector<double> dh_values;
-  // per-vertex candidates within RADIUS: non-null, in-bounds, Manhattan <= RADIUS
-  std::vector<std::vector<Vertex*>> radial_neighbors;
 
   // swap, used in the LaCAM* paper
   bool flg_swap;
@@ -63,6 +43,13 @@ struct PIBT {
   // scatter
   Scatter *scatter;
 
+  // for fill_dh_values
+  std::vector<uint32_t> visited_token; // Initialize with size N, filled with 0
+  uint32_t current_evaluation_token;   // Initialize to 0  
+  // The key is t * V_size + v->id and the value is a vector of agent IDs
+  // whose MDDs overlap vertex v at time t.
+  std::vector<std::vector<int>> agents_by_t_v; 
+  std::vector<size_t> dirty_t_v_vectors;
 
   PIBT(const Graph *_G, Config _goals, DistTable *_D, int seed = 0, bool _flg_swap = true,
        Scatter *_scatter = nullptr);
@@ -89,4 +76,15 @@ struct PIBT {
   }
 
   inline int64_t dh_cache_key(int i, int j) const { return (int64_t)i * N + j; }
+
+  inline uint32_t get_mdd_id(int v, int goal) {
+    uint32_t agent_id_for_db = V_size * v + goal;
+    return pair_db->mdd_id_by_agent[agent_id_for_db];
+  }
+
+  void register_agent_mdd(int agent_id, uint32_t mdd_id);
+
+  template <typename Func>
+  void for_each_other_agent_overlapping_with_mdd(uint32_t mdd_id, Func callback);
+
 };
