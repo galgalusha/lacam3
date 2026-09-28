@@ -8,33 +8,25 @@
 #include <mutex>
 #include <algorithm>
 #include <iostream>
+#include <fstream>
+#include <filesystem>
 #include <unordered_map>
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
 
 
-/**
- * ## Thoughts For PIBT
- * For an agent i, we need to find every agent j that has a conflict within the horizon.
- * Suppose horizon=5. The MDD of agent i contains thousands of possible conflicts in
- * the DB. Iterating them is not a good option. Iterating through all agents j for every
- * agent i is also a bad option. We don't want N^2 complexity in PIBT.
- * What we do is pre-calculate (before the solver begins) an MDD for each possible agent 
- * setting (v_i, goal_i). For horizon=5, the max MDD size is 21 vertices.
- * During PIBT, before iterating the agents and calling funcPIBT, iterate through all
- * agent MDDs to build an index from (vertex, time) to an agent id. Complexity is N*21.
- * We don't use a real map but rather an array with an index of (time*|V|+vertex.id).
- * When agent i considers moving from v_i to u_i, we can pick the MDD for u_i from the
- * MDD cache. For each (time, vertex) in this MDD, we can find conflicts using the index.
- * However, this assumes the other agents are stationary. So when an agent actually moves,
- * we need to remove its previous MDD from the index and update the index with its new MDD.
- * Another option is not to create accurate MDDs in the pre-calculation but rather
- * an extended structure, lets call it EMDD, that considers all possible moves.
- */
-
+const std::string ROOT_FOLDER = "./mapf_db/"; 
 const int HorizonPairDB::HORIZON = 5;
-
 static const int NUM_OF_THREADS = 8;
+
+static void print_progress_bar(size_t done, size_t total) {
+  const int bar_width = 40;
+  float frac = total > 0 ? (float)done / (float)total : 1.0f;
+  int filled = (int)(frac * bar_width);
+  std::cout << "\r[";
+  for (int k = 0; k < bar_width; ++k) std::cout << (k < filled ? '#' : '-');
+  std::cout << "] " << std::fixed << std::setprecision(2) << (frac * 100.0f) << "%" << std::flush;
+}
 
 
 static DistTable* create_dist_table(Graph* G) {
@@ -44,14 +36,14 @@ static DistTable* create_dist_table(Graph* G) {
   return D;
 }
 
-HorizonPairDB::HorizonPairDB(Graph* _G) : G(_G), D(create_dist_table(G)), V_SIZE(_G->V.size()) {}
+HorizonPairDB::HorizonPairDB(Graph* _G, std::string _name) : G(_G), D(create_dist_table(G)), V_SIZE(_G->V.size()), name(_name) {}
 
 
 void HorizonPairDB::generate_mdds() {
   size_t V_SIZE = G->V.size();
 
   // Pre-allocate master storage
-  mdd_id_by_agent.assign(V_SIZE * V_SIZE, 0);
+  mdd_id_by_v_g.assign(V_SIZE * V_SIZE, 0);
   mdd_by_id.resize(V_SIZE * V_SIZE);
   mdd_by_t_s.assign(V_SIZE * (HORIZON + 1), std::vector<uint32_t>());
 
@@ -103,17 +95,8 @@ void HorizonPairDB::generate_mdds() {
         mdd_by_id[mdd_id] = mdd;
       }
 
-      // if (v_i == 321) {
-      //   std::lock_guard lock1(io_mtx);
-      //   std::lock_guard lock2(mdd_mtx2);
-      //   std::lock_guard lock3(mdd_count_mtx);
-      //   std::cout << "v_i: " << v_i << ", mdd_id: " << mdd_id << ", g_i: " << g_i 
-      //             << "\t " << mdd.str()
-      //             << std::endl;
-      // }
-
       // Lock-free write! agent_id is strictly unique per loop iteration.
-      mdd_id_by_agent[agent_id] = mdd_id;
+      mdd_id_by_v_g[agent_id] = mdd_id;
 
       if (is_new_mdd) {
         // Protect mdd_by_t_s because different v_i threads might hit the same space-time vertex
@@ -317,7 +300,7 @@ void HorizonPairDB::test_db_1() {
     "...",
   };
   Graph* G = new Graph(grid);
-  HorizonPairDB DB(G);
+  HorizonPairDB DB(G, "test");
   DB.generate_mdds();
   DB.generate_conflicts();
 
@@ -372,4 +355,219 @@ void HorizonPairDB::test_db_1() {
   }
 
   delete G;
+}
+
+
+// ---------------------------------------------------------------------------
+// Serialization
+// ---------------------------------------------------------------------------
+
+void HorizonPairDB::write_header(std::ofstream& out, const FileHeader& header) {
+  out.write(reinterpret_cast<const char*>(&header.num_mdds), sizeof(header.num_mdds));
+  out.write(reinterpret_cast<const char*>(&header.offset_mdd_by_id), sizeof(header.offset_mdd_by_id));
+  out.write(reinterpret_cast<const char*>(&header.offset_mdd_id_by_v_g), sizeof(header.offset_mdd_id_by_v_g));
+  out.write(reinterpret_cast<const char*>(&header.offset_conflicts), sizeof(header.offset_conflicts));
+}
+
+bool HorizonPairDB::read_header(std::ifstream& in, FileHeader& header) {
+  in.read(reinterpret_cast<char*>(&header.num_mdds), sizeof(header.num_mdds));
+  in.read(reinterpret_cast<char*>(&header.offset_mdd_by_id), sizeof(header.offset_mdd_by_id));
+  in.read(reinterpret_cast<char*>(&header.offset_mdd_id_by_v_g), sizeof(header.offset_mdd_id_by_v_g));
+  in.read(reinterpret_cast<char*>(&header.offset_conflicts), sizeof(header.offset_conflicts));
+  return static_cast<bool>(in);
+}
+
+// Frontier vertices are stored as v->id (index into G->V), not v->index.
+void HorizonPairDB::write_mdd(std::ofstream& out, const MDD& mdd) {
+  uint8_t num_frontiers = static_cast<uint8_t>(mdd.frontiers.size());
+  out.write(reinterpret_cast<const char*>(&num_frontiers), sizeof(num_frontiers));
+  for (const auto& frontier : mdd.frontiers) {
+    uint8_t num_vertices = static_cast<uint8_t>(frontier.size());
+    out.write(reinterpret_cast<const char*>(&num_vertices), sizeof(num_vertices));
+    for (Vertex* v : frontier) {
+      uint16_t vid = static_cast<uint16_t>(v->id);
+      out.write(reinterpret_cast<const char*>(&vid), sizeof(vid));
+    }
+  }
+  const uint8_t sentinel = 255;
+  out.write(reinterpret_cast<const char*>(&sentinel), sizeof(sentinel));
+}
+
+bool HorizonPairDB::read_mdd(std::ifstream& in, MDD& mdd) {
+  uint8_t num_frontiers;
+  in.read(reinterpret_cast<char*>(&num_frontiers), sizeof(num_frontiers));
+  mdd.frontiers.assign(num_frontiers, {});
+  for (uint8_t t = 0; t < num_frontiers; t++) {
+    uint8_t num_vertices;
+    in.read(reinterpret_cast<char*>(&num_vertices), sizeof(num_vertices));
+    mdd.frontiers[t].resize(num_vertices);
+    for (uint8_t i = 0; i < num_vertices; i++) {
+      uint16_t vid;
+      in.read(reinterpret_cast<char*>(&vid), sizeof(vid));
+      mdd.frontiers[t][i] = G->V[vid];  // v->id doubles as the index into G->V
+    }
+  }
+  uint8_t sentinel;
+  in.read(reinterpret_cast<char*>(&sentinel), sizeof(sentinel));
+  if (!in) return false;
+  if (sentinel != 255) {
+    std::cerr << "HorizonPairDB::read_mdd: sentinel mismatch, file is corrupt" << std::endl;
+    return false;
+  }
+  return true;
+}
+
+void HorizonPairDB::write_mdd_by_id_section(std::ofstream& out) {
+  std::cout << "Saving MDDs..." << std::endl;
+  for (uint32_t id = 0; id < mdd_count; id++) {
+    write_mdd(out, mdd_by_id[id]);
+    if (id % 256 == 0 || id + 1 == mdd_count) print_progress_bar(id + 1, mdd_count);
+  }
+  std::cout << std::endl;
+  out.write(reinterpret_cast<const char*>(&mdd_count), sizeof(mdd_count));
+}
+
+bool HorizonPairDB::read_mdd_by_id_section(std::ifstream& in) {
+  std::cout << "Loading MDDs..." << std::endl;
+  mdd_by_id.resize(mdd_count);
+  for (uint32_t id = 0; id < mdd_count; id++) {
+    if (!read_mdd(in, mdd_by_id[id])) return false;
+    if (id % 256 == 0 || id + 1 == mdd_count) print_progress_bar(id + 1, mdd_count);
+  }
+  std::cout << std::endl;
+
+  uint32_t summary;
+  in.read(reinterpret_cast<char*>(&summary), sizeof(summary));
+  if (!in || summary != mdd_count) {
+    std::cerr << "HorizonPairDB::read_mdd_by_id_section: summary mismatch, expected "
+              << mdd_count << " got " << summary << std::endl;
+    return false;
+  }
+  return true;
+}
+
+void HorizonPairDB::write_mdd_id_by_v_g_section(std::ofstream& out) {
+  std::cout << "Saving mdd_id_by_v_g..." << std::endl;
+  out.write(reinterpret_cast<const char*>(mdd_id_by_v_g.data()),
+            mdd_id_by_v_g.size() * sizeof(uint32_t));
+  print_progress_bar(1, 1);
+  std::cout << std::endl;
+}
+
+bool HorizonPairDB::read_mdd_id_by_v_g_section(std::ifstream& in) {
+  std::cout << "Loading mdd_id_by_v_g..." << std::endl;
+  mdd_id_by_v_g.assign(V_SIZE * V_SIZE, 0);
+  in.read(reinterpret_cast<char*>(mdd_id_by_v_g.data()),
+          mdd_id_by_v_g.size() * sizeof(uint32_t));
+  print_progress_bar(1, 1);
+  std::cout << std::endl;
+  return static_cast<bool>(in);
+}
+
+void HorizonPairDB::write_conflicts_section(std::ofstream& out) {
+  std::cout << "Saving conflicts..." << std::endl;
+  const uint32_t num_conflicts = static_cast<uint32_t>(conflicts.size());
+  out.write(reinterpret_cast<const char*>(&num_conflicts), sizeof(num_conflicts));
+  for (uint32_t id = 0; id < num_conflicts; id++) {
+    const auto& map = conflicts[id];
+    uint32_t num_entries = static_cast<uint32_t>(map.size());
+    out.write(reinterpret_cast<const char*>(&num_entries), sizeof(num_entries));
+    for (const auto& [key, value] : map) {
+      out.write(reinterpret_cast<const char*>(&key), sizeof(key));
+      out.write(reinterpret_cast<const char*>(&value), sizeof(value));
+    }
+    if (id % 256 == 0 || id + 1 == num_conflicts) print_progress_bar(id + 1, num_conflicts);
+  }
+  std::cout << std::endl;
+}
+
+bool HorizonPairDB::read_conflicts_section(std::ifstream& in) {
+  std::cout << "Loading conflicts..." << std::endl;
+  uint32_t num_conflicts;
+  in.read(reinterpret_cast<char*>(&num_conflicts), sizeof(num_conflicts));
+  if (!in || num_conflicts != mdd_count) {
+    std::cerr << "HorizonPairDB::read_conflicts_section: count mismatch, expected "
+              << mdd_count << " got " << num_conflicts << std::endl;
+    return false;
+  }
+
+  conflicts.assign(num_conflicts, {});
+  for (uint32_t id = 0; id < num_conflicts; id++) {
+    uint32_t num_entries;
+    in.read(reinterpret_cast<char*>(&num_entries), sizeof(num_entries));
+    if (!in) return false;
+    auto& map = conflicts[id];
+    map.reserve(num_entries);
+    for (uint32_t e = 0; e < num_entries; e++) {
+      uint32_t key;
+      uint8_t value;
+      in.read(reinterpret_cast<char*>(&key), sizeof(key));
+      in.read(reinterpret_cast<char*>(&value), sizeof(value));
+      if (!in) return false;
+      map.emplace(key, value);
+    }
+    if (id % 256 == 0 || id + 1 == num_conflicts) print_progress_bar(id + 1, num_conflicts);
+  }
+  std::cout << std::endl;
+  return true;
+}
+
+bool HorizonPairDB::save_to_file() {
+  std::filesystem::create_directories(ROOT_FOLDER);
+  const std::string path = ROOT_FOLDER + name + ".mdd_db";
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  if (!out) {
+    std::cerr << "HorizonPairDB::save_to_file: failed to open " << path << " for writing" << std::endl;
+    return false;
+  }
+
+  FileHeader header{mdd_count, 0, 0, 0};
+  write_header(out, header);  // placeholder, patched with real offsets below
+
+  header.offset_mdd_by_id = static_cast<uint64_t>(out.tellp());
+  write_mdd_by_id_section(out);
+
+  header.offset_mdd_id_by_v_g = static_cast<uint64_t>(out.tellp());
+  write_mdd_id_by_v_g_section(out);
+
+  header.offset_conflicts = static_cast<uint64_t>(out.tellp());
+  write_conflicts_section(out);
+
+  out.seekp(0);
+  write_header(out, header);
+
+  if (!out) {
+    std::cerr << "HorizonPairDB::save_to_file: I/O error while writing " << path << std::endl;
+    return false;
+  }
+  std::cout << "Saved HorizonPairDB to " << path << std::endl;
+  return true;
+}
+
+bool HorizonPairDB::load_from_file() {
+  const std::string path = ROOT_FOLDER + name + ".mdd_db";
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    std::cerr << "HorizonPairDB::load_from_file: failed to open " << path << " for reading" << std::endl;
+    return false;
+  }
+
+  FileHeader header;
+  if (!read_header(in, header)) {
+    std::cerr << "HorizonPairDB::load_from_file: failed to read header from " << path << std::endl;
+    return false;
+  }
+  mdd_count = header.num_mdds;
+
+  in.seekg(header.offset_mdd_by_id);
+  if (!read_mdd_by_id_section(in)) return false;
+
+  in.seekg(header.offset_mdd_id_by_v_g);
+  if (!read_mdd_id_by_v_g_section(in)) return false;
+
+  in.seekg(header.offset_conflicts);
+  if (!read_conflicts_section(in)) return false;
+
+  std::cout << "Loaded HorizonPairDB from " << path << std::endl;
+  return true;
 }

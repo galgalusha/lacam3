@@ -79,7 +79,7 @@ struct PIBT {
 
   inline uint32_t get_mdd_id(int v, int goal) {
     uint32_t agent_id_for_db = V_size * v + goal;
-    return pair_db->mdd_id_by_agent[agent_id_for_db];
+    return pair_db->mdd_id_by_v_g[agent_id_for_db];
   }
 
   void register_agent_mdd(int agent_id, uint32_t mdd_id);

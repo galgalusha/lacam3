@@ -2,6 +2,7 @@
 
 #include "mdd.hpp"
 #include <absl/container/flat_hash_map.h>
+#include <fstream>
 
 
 struct HorizonPairDB {
@@ -9,16 +10,17 @@ struct HorizonPairDB {
   Graph* G;
   DistTable* D;
   size_t V_SIZE;
+  std::string name;
 
-  HorizonPairDB(Graph* _G);
+  HorizonPairDB(Graph* _G, std::string _name);
 
   uint32_t mdd_count = 0;
 
-  // from id to MDD
+  // The index is the MDD id.
   std::vector<MDD> mdd_by_id;
 
-  // agent_id = v_i * V_SIZE + g_i;
-  std::vector<uint32_t> mdd_id_by_agent;
+  //Index is v->id * V_SIZE + g->id;
+  std::vector<uint32_t> mdd_id_by_v_g;
 
   // This is an index from a tuple (int time, int vertex_id) to an MDD
   // where the index is t * (G->V.size()) + vertex_id.
@@ -41,13 +43,46 @@ struct HorizonPairDB {
   // indefinitely until the process is killed.
   void interactive_mdd_test();
 
+  // Serializes mdd_by_id, mdd_id_by_v_g and conflicts to
+  // ROOT_FOLDER + name + ".mdd_db". Returns false on I/O failure.
+  // mdd_by_t_s is not persisted since it is only a temporary build utility.
+  bool save_to_file();
+
+  // Populates mdd_by_id, mdd_id_by_v_g and conflicts from the file written by
+  // save_to_file(), running sanity checks along the way. Returns false on
+  // I/O failure or if a sanity check fails.
+  bool load_from_file();
+
+  // Header of the .mdd_db file: MDD count plus the byte offset of each section.
+  struct FileHeader {
+    uint32_t num_mdds;
+    uint64_t offset_mdd_by_id;
+    uint64_t offset_mdd_id_by_v_g;
+    uint64_t offset_conflicts;
+  };
+
+  void write_header(std::ofstream& out, const FileHeader& header);
+  bool read_header(std::ifstream& in, FileHeader& header);
+
+  void write_mdd(std::ofstream& out, const MDD& mdd);
+  bool read_mdd(std::ifstream& in, MDD& mdd);
+
+  void write_mdd_by_id_section(std::ofstream& out);
+  bool read_mdd_by_id_section(std::ifstream& in);
+
+  void write_mdd_id_by_v_g_section(std::ofstream& out);
+  bool read_mdd_id_by_v_g_section(std::ifstream& in);
+
+  void write_conflicts_section(std::ofstream& out);
+  bool read_conflicts_section(std::ifstream& in);
+
   inline uint8_t get_penalty(int v1, int g1, int v2, int g2) {
-    int agent1 = v1 * V_SIZE + g1;
-    int agent2 = v2 * V_SIZE + g2;
-    uint32_t mdd_id1 = mdd_id_by_agent[agent1];
-    uint32_t mdd_id2 = mdd_id_by_agent[agent2];
-    int min_mdd_id = mdd_id1 < mdd_id2 ? mdd_id1 : mdd_id2;
-    int max_mdd_id = mdd_id1 > mdd_id2 ? mdd_id1 : mdd_id2;
+    uint32_t agent1 = v1 * V_SIZE + g1;
+    uint32_t agent2 = v2 * V_SIZE + g2;
+    uint32_t mdd_id1 = mdd_id_by_v_g[agent1];
+    uint32_t mdd_id2 = mdd_id_by_v_g[agent2];
+    uint32_t min_mdd_id = mdd_id1 < mdd_id2 ? mdd_id1 : mdd_id2;
+    uint32_t max_mdd_id = mdd_id1 > mdd_id2 ? mdd_id1 : mdd_id2;
     auto& map = conflicts[min_mdd_id];
     auto entry = map.find(max_mdd_id);
     return entry == map.end() ? 0 : entry->second;
