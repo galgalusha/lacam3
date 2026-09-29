@@ -1,5 +1,19 @@
 #include "../include/dist_table.hpp"
 
+#include <atomic>
+#include <iomanip>
+#include <iostream>
+#include <mutex>
+
+static void print_progress_bar(size_t done, size_t total) {
+  const int bar_width = 40;
+  float frac = total > 0 ? (float)done / (float)total : 1.0f;
+  int filled = (int)(frac * bar_width);
+  std::cout << "\r[";
+  for (int k = 0; k < bar_width; ++k) std::cout << (k < filled ? '#' : '-');
+  std::cout << "] " << std::fixed << std::setprecision(2) << (frac * 100.0f) << "%" << std::flush;
+}
+
 DistTable::DistTable(const Instance &ins, bool toward_goal)
     : K(ins.G->V.size()), table(ins.N, std::vector<int>(K, K))
 {
@@ -14,6 +28,10 @@ DistTable::DistTable(const Instance *ins, bool toward_goal)
 
 void DistTable::setup(const Instance *ins, bool toward_goal)
 {
+  std::mutex io_mtx;  // protects the progress bar since bfs() runs on multiple threads
+  std::atomic<int> done = 0;
+  print_progress_bar(0, ins->N);
+
   auto bfs = [&](const int i) {
     auto g_i = toward_goal ? ins->goals[i] : ins->starts[i];
     auto Q = std::queue<Vertex *>({g_i});
@@ -29,6 +47,9 @@ void DistTable::setup(const Instance *ins, bool toward_goal)
         Q.push(m);
       }
     }
+    const int done_now = ++done;
+    std::lock_guard lock(io_mtx);
+    print_progress_bar(done_now, ins->N);
   };
 
   const int num_threads =
@@ -40,6 +61,12 @@ void DistTable::setup(const Instance *ins, bool toward_goal)
       for (int i = t; i < (int)ins->N; i += num_threads) bfs(i);
     }));
   }
+
+  // std::future from std::async(launch::async, ...) blocks in its destructor
+  // until the task finishes, so this explicit get() loop just makes that
+  // existing wait visible rather than relying on pool's implicit destruction.
+  for (auto &fut : pool) fut.get();
+  std::cout << std::endl;
 }
 
 DistTable::DistTable(int K) : K(K) {}

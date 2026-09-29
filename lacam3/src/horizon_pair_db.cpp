@@ -28,11 +28,50 @@ static void print_progress_bar(size_t done, size_t total) {
   std::cout << "] " << std::fixed << std::setprecision(2) << (frac * 100.0f) << "%" << std::flush;
 }
 
+// Prints median/average/p90/p95 of the number of entries per conflict map.
+static void print_conflict_entry_stats(std::vector<uint32_t> entries_per_map) {
+  if (entries_per_map.empty()) return;
+  std::sort(entries_per_map.begin(), entries_per_map.end());
+
+  const size_t n = entries_per_map.size();
+  auto percentile = [&](double p) {
+    size_t idx = std::min(n - 1, static_cast<size_t>(p * n));
+    return entries_per_map[idx];
+  };
+
+  double sum = 0;
+  for (uint32_t v : entries_per_map) sum += v;
+  double average = sum / (double)n;
+  double median = (n % 2 == 0)
+      ? (entries_per_map[n / 2 - 1] + entries_per_map[n / 2]) / 2.0
+      : entries_per_map[n / 2];
+
+  std::cout << "Conflict map entry stats (n=" << n << "): "
+            << "average=" << std::fixed << std::setprecision(2) << average
+            << ", median=" << median
+            << ", p90=" << percentile(0.90)
+            << ", p95=" << percentile(0.95) << std::endl;
+}
+
+// Prints all entries of conflicts[mdd_id], one per line, sorted lexicographically
+// by (other_mdd_id, value).
+static void print_conflict_entries(uint32_t mdd_id, const absl::flat_hash_map<uint32_t, uint8_t>& map) {
+  std::vector<std::pair<uint32_t, uint8_t>> entries(map.begin(), map.end());
+  std::sort(entries.begin(), entries.end());
+
+  std::cout << "Conflicts for mdd_id=" << mdd_id << " (n=" << entries.size() << "):" << std::endl;
+  std::cout << "other_mdd_id\tvalue" << std::endl;
+  for (const auto& [other_mdd_id, value] : entries)
+    std::cout << other_mdd_id << '\t' << (int)value << std::endl;
+}
+
 
 static DistTable* create_dist_table(Graph* G) {
+  std::cout << "Creating the big DistTable" << std::endl;
   Config goals = G->V;
   Instance* ins = new Instance(G, goals, goals, goals.size());
   auto D = new DistTable(ins);
+  std::cout << "Finished creating the big DistTable" << std::endl;
   return D;
 }
 
@@ -492,6 +531,8 @@ bool HorizonPairDB::read_conflicts_section(std::ifstream& in) {
   }
 
   conflicts.assign(num_conflicts, {});
+  std::vector<uint32_t> entries_per_map;
+  entries_per_map.reserve(num_conflicts);
   for (uint32_t id = 0; id < num_conflicts; id++) {
     uint32_t num_entries;
     in.read(reinterpret_cast<char*>(&num_entries), sizeof(num_entries));
@@ -506,9 +547,15 @@ bool HorizonPairDB::read_conflicts_section(std::ifstream& in) {
       if (!in) return false;
       map.emplace(key, value);
     }
+    entries_per_map.push_back(num_entries);
     if (id % 256 == 0 || id + 1 == num_conflicts) print_progress_bar(id + 1, num_conflicts);
   }
   std::cout << std::endl;
+  print_conflict_entry_stats(entries_per_map);
+
+  const uint32_t debug_mdd_id = 15151;
+  if (debug_mdd_id < conflicts.size())
+    print_conflict_entries(debug_mdd_id, conflicts[debug_mdd_id]);
   return true;
 }
 
