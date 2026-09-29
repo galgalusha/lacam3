@@ -6,6 +6,13 @@
 
 
 struct HorizonPairDB {
+
+  struct MDD_Penalty {
+    uint32_t mdd_id;
+    uint8_t penalty;
+  };
+
+
   static const int HORIZON;
   Graph* G;
   DistTable* D;
@@ -32,6 +39,10 @@ struct HorizonPairDB {
   // It is assumed that id1 < id2 so we don't need to store conflicts[50][10] which
   // should have the same value as conflicts[10][50]
   std::vector<absl::flat_hash_map<uint32_t, uint8_t>> conflicts;
+
+  // Similar to confclits, but per MDD, its a vector of entries rather than a map.
+  // Also, it should be symmetrical so if mdd1 contains mdd2, mdd2 shall contain mdd1.
+  std::vector<std::vector<MDD_Penalty>> penalties;
 
   void generate_mdds();
 
@@ -76,16 +87,20 @@ struct HorizonPairDB {
   void write_conflicts_section(std::ofstream& out);
   bool read_conflicts_section(std::ifstream& in);
 
-  inline uint8_t get_penalty(int v1, int g1, int v2, int g2) {
-    uint32_t agent1 = v1 * V_SIZE + g1;
-    uint32_t agent2 = v2 * V_SIZE + g2;
-    uint32_t mdd_id1 = mdd_id_by_v_g[agent1];
-    uint32_t mdd_id2 = mdd_id_by_v_g[agent2];
+  inline uint8_t get_penalty(uint32_t mdd_id1, uint32_t mdd_id2) {
     uint32_t min_mdd_id = mdd_id1 < mdd_id2 ? mdd_id1 : mdd_id2;
     uint32_t max_mdd_id = mdd_id1 > mdd_id2 ? mdd_id1 : mdd_id2;
     auto& map = conflicts[min_mdd_id];
     auto entry = map.find(max_mdd_id);
     return entry == map.end() ? 0 : entry->second;
+  }
+
+  inline uint8_t get_penalty(int v1, int g1, int v2, int g2) {
+    uint32_t agent1 = v1 * V_SIZE + g1;
+    uint32_t agent2 = v2 * V_SIZE + g2;
+    uint32_t mdd_id1 = mdd_id_by_v_g[agent1];
+    uint32_t mdd_id2 = mdd_id_by_v_g[agent2];
+    return get_penalty(mdd_id1, mdd_id2);
   }
 
   static void test_db_1();

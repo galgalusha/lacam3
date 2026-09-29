@@ -36,7 +36,7 @@ struct PIBT {
   std::vector<int> occupied_now;                // for quick collision checking
   std::vector<int> occupied_next;               // for quick collision checking
   std::vector<std::array<Vertex *, 5>> C_next;  // next location candidates
-  std::vector<double> tie_breakers;             // random values, used in PIBT
+  std::vector<double> tie_breakers;              // random values, used in PIBT
   std::vector<double> dh_values;
   MDDRegistry mdd_registry;
 

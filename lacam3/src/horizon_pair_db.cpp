@@ -531,6 +531,7 @@ bool HorizonPairDB::read_conflicts_section(std::ifstream& in) {
   }
 
   conflicts.assign(num_conflicts, {});
+  penalties.assign(num_conflicts, {});
   std::vector<uint32_t> entries_per_map;
   entries_per_map.reserve(num_conflicts);
   for (uint32_t id = 0; id < num_conflicts; id++) {
@@ -546,6 +547,9 @@ bool HorizonPairDB::read_conflicts_section(std::ifstream& in) {
       in.read(reinterpret_cast<char*>(&value), sizeof(value));
       if (!in) return false;
       map.emplace(key, value);
+      // id < key always, since we only store conflicts[id1][id2] for id1 < id2.
+      penalties[id].push_back({key, value});
+      penalties[key].push_back({id, value});
     }
     entries_per_map.push_back(num_entries);
     if (id % 256 == 0 || id + 1 == num_conflicts) print_progress_bar(id + 1, num_conflicts);

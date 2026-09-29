@@ -100,6 +100,7 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
 
 void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to, const int start)
 {
+  // std::cout << "[1] fill_dh_values " << std::endl;
   for (int k = start; k < num_neighbors; ++k) {
     Vertex* u_i = neighbors[k];
     double max_penalty = 0;
@@ -107,12 +108,9 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
 
     uint32_t mdd_i = get_mdd_id(u_i->id, goals[i]->id);
 
-    // for (const auto& conflict : pair_db->conflicts[mdd_i]) {
-    //   uint32_t mdd_j = conflict.first;
-    //   double penalty = conflict.second;
-    for (const auto& conflict : pair_db->penalties[mdd_i]) {
-      uint32_t mdd_j = conflict.mdd_id;
-      double penalty = conflict.penalty;
+    for (const auto& conflict : pair_db->conflicts[mdd_i]) {
+      uint32_t mdd_j = conflict.first;
+      double penalty = conflict.second;
       int j;
       //
       // Scenario 1: Agent j already moved
@@ -128,6 +126,7 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
       //
       j = mdd_registry.mdd_id_to_agent_now[mdd_j];
       if (j != mdd_registry.NO_AGENT && j != i && Q_to[j] == nullptr) {
+        // std::cout << "[3] fill_dh_values - scenario 2 " << std::endl;
         double speculated_penalty = penalty * DISCOUNT_FACTOR;
         if (speculated_penalty > max_penalty) max_penalty = speculated_penalty;
         total_penalty += speculated_penalty;
@@ -146,6 +145,7 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
       if (penalty > max_penalty) max_penalty = penalty;
       total_penalty += penalty;
     }
+    // std::cout << "[4] fill_dh_values - finished" << std::endl;
 
     double final_penalty = max_penalty + (total_penalty - max_penalty) * 0.25;
     // Write the final maximum penalty to the pre-allocated array
@@ -207,10 +207,6 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
       // pull swap_agent
       occupied_next[Q_from[i]->id] = swap_agent;
       Q_to[swap_agent] = Q_from[i];
-
-      if (pair_db != nullptr) {
-        mdd_registry.register_agent_next(swap_agent, get_mdd_id(Q_from[i]->id, goals[swap_agent]->id));
-      }      
     }
   };
 
@@ -252,9 +248,12 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
     Q_to[i] = u;
 
     if (pair_db != nullptr) mdd_registry.register_agent_next(i, get_mdd_id(u->id, goals[i]->id));
+    // std::cout << "[2] funcPIBT - registered MDD" << std::endl;
 
     // priority inheritance
     if (j != NO_AGENT && u != Q_from[i] && Q_to[j] == nullptr && !funcPIBT(j, Q_from, Q_to)) {
+      // occupied_next[u->id] = NO_AGENT;
+      // Q_to[i] = nullptr;
       continue;
     }
 
@@ -266,9 +265,6 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
   // failed to secure node
   occupied_next[Q_from[i]->id] = i;
   Q_to[i] = Q_from[i];
-  if (pair_db != nullptr) {
-    mdd_registry.register_agent_next(i, get_mdd_id(Q_from[i]->id, goals[i]->id));
-  }  
   return false;
 }
 
