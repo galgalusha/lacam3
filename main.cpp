@@ -6,6 +6,7 @@
 #include <asha_planner.hpp>
 #include <mdd.hpp>
 #include <horizon_pair_db.hpp>
+#include <horizon_pair_db_generator.hpp>
 
 
 int main(int argc, char *argv[])
@@ -163,29 +164,34 @@ int main(int argc, char *argv[])
       std::stof(program.get<std::string>("checkpoints-duration")) * 1000;
 
   if (gen_pair_db) {
-    HorizonPairDB* db = new HorizonPairDB(ins.G, pair_db_name);
+    HorizonPairDBGenerator* db = new HorizonPairDBGenerator(ins.G, pair_db_name);
     db->generate_mdds();
-    db->generate_conflicts();
+    db->flag_mdds_for_conflicts();
+    db->generate_sync_time_conflicts();
     db->save_to_file();
     exit(0);
   }
+
+//   MDD::test_joint_mdd();
+//   MDD::test_joint_mdd2();
+//   MDD::test_joint_mdd_with_wait();
+//   MDD::test_joint_mdd_with_wait2();
+//   HorizonPairDBGenerator::test_db_1();
+//   exit(0);
+
+//   HorizonPairDB* db1 = new HorizonPairDB(ins.G, "H_5_warehouse-mini");
+//   db1->load_from_file();
+//   HorizonPairDB* db2 = new HorizonPairDB(ins.G, "warehouse-mini");
+//   db2->load_from_file();
+//   db1->compare_to_other_db(*db2);
+//   exit(0);
+  
 
   if (use_pair_db) {
     HorizonPairDB* db = new HorizonPairDB(ins.G, pair_db_name);
     db->load_from_file();
     PIBT::pair_db = db;
   }
-
-//   HorizonPairDB db(ins.G);
-//   db.generate_mdds();
-//   db.generate_conflicts();
-//   MDD::test_joint_mdd();
-//   MDD::test_joint_mdd2();
-//   MDD::test_joint_mdd_with_wait();
-//   MDD::test_joint_mdd_with_wait2();
-//   HorizonPairDB::test_db_1();
-//   exit(0);
-
 
   // solve
 
