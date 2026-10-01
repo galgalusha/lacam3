@@ -77,4 +77,6 @@ struct PIBT {
     return pair_db->mdd_id_by_v_g[agent_id_for_db];
   }
 
+  uint8_t get_mdd_panelaty_for_push(int i, Vertex* u_i, uint32_t mdd_i_id, int j, const Config& Q_from);
+
 };

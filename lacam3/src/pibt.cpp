@@ -107,9 +107,6 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
 
     uint32_t mdd_i = get_mdd_id(u_i->id, goals[i]->id);
 
-    // for (const auto& conflict : pair_db->conflicts[mdd_i]) {
-    //   uint32_t mdd_j = conflict.first;
-    //   double penalty = conflict.second;
     for (const auto& conflict : pair_db->penalties[mdd_i]) {
       uint32_t mdd_j = conflict.mdd_id;
       double penalty = conflict.penalty;
@@ -139,19 +136,34 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
     //
     int j = occupied_now[u_i->id];
     if (j != NO_AGENT && j != i && Q_to[j] == nullptr) {
-      // std::cout << "[3] fill_dh_values - scenario 3 " << std::endl;
-      uint32_t mdd_i_now = mdd_registry.agent_to_mdd_id_now[i];
-      uint32_t mdd_j_now = mdd_registry.agent_to_mdd_id_now[j];
-      double penalty = pair_db->get_penalty(mdd_i_now, mdd_j_now) * DISCOUNT_FACTOR;
+      double penalty = get_mdd_panelaty_for_push(i, u_i, mdd_i, j, Q_from) * DISCOUNT_FACTOR;
       if (penalty > max_penalty) max_penalty = penalty;
       total_penalty += penalty;
-    }
+    } 
 
     double final_penalty = max_penalty + (total_penalty - max_penalty) * 0.25;
     // Write the final maximum penalty to the pre-allocated array
     dh_values[u_i->id] = DH_WEIGHT * final_penalty;
   }
 }
+
+
+uint8_t PIBT::get_mdd_panelaty_for_push(int i, Vertex* u_i, uint32_t mdd_i_id, int j, const Config& Q_from) {
+  static const uint32_t MAX_PENALTY = 2;
+  if (goals[j]->id == u_i->id) return MAX_PENALTY;
+  uint8_t penalty = MAX_PENALTY;
+  auto& j_frontiers = pair_db->mdd_by_id[get_mdd_id(u_i->id, goals[j]->id)].frontiers[1];
+  for (auto u_j : j_frontiers) {
+    if (u_j->id == Q_from[i]->id) continue; // swap conflict with i.
+    if (occupied_next[u_j->id] != NO_AGENT) continue; // vertex conflict
+    uint32_t mdd_u_j = get_mdd_id(u_j->id, goals[j]->id);
+    uint8_t u_j_penalty = pair_db->get_penalty(mdd_i_id, mdd_u_j);
+    if (u_j_penalty == 0) return 0;
+    if (u_j_penalty < penalty) penalty = u_j_penalty;
+  }
+  return penalty;
+}
+
 
 bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
 {
