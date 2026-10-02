@@ -3,7 +3,6 @@
 #include <iostream>
 #include <lacam.hpp>
 #include <drawing.hpp>
-#include <asha_planner.hpp>
 #include <mdd.hpp>
 #include <horizon_pair_db.hpp>
 #include <horizon_pair_db_generator.hpp>
@@ -178,13 +177,6 @@ int main(int argc, char *argv[])
 //   MDD::test_joint_mdd_with_wait2();
 //   HorizonPairDBGenerator::test_db_1();
 //   exit(0);
-
-//   HorizonPairDB* db1 = new HorizonPairDB(ins.G, "H_5_warehouse-mini");
-//   db1->load_from_file();
-//   HorizonPairDB* db2 = new HorizonPairDB(ins.G, "warehouse-mini");
-//   db2->load_from_file();
-//   db1->compare_to_other_db(*db2);
-//   exit(0);
   
 
   if (use_pair_db) {
@@ -199,13 +191,7 @@ int main(int argc, char *argv[])
 
   Solution solution;
 
-  if (asha_planner) {
-    info(1, verbose, &deadline, "pre-processing");
-    auto planner = ASHA_Planner(&ins, verbose, &deadline, seed);
-    solution = planner.solve();
-  } else {
-    solution = solve(ins, verbose - 1, &deadline, seed);
-  }
+  solution = solve(ins, verbose - 1, &deadline, seed);
   const auto comp_time_ms = deadline.elapsed_ms();
 
   // failure

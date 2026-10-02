@@ -3,18 +3,16 @@
 #include <condition_variable>
 #include <functional>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <queue>
 #include <thread>
+#include <type_traits>
 #include <vector>
-
-struct BinEntry;
-
-struct ThreadResult { std::vector<BinEntry> entries; long long evaluated; };
 
 struct ThreadPool {
   std::vector<std::thread> workers;
-  std::queue<std::packaged_task<ThreadResult()>> tasks;
+  std::queue<std::function<void()>> tasks;
   std::mutex mtx;
   std::condition_variable cv;
   bool stop = false;
@@ -23,7 +21,7 @@ struct ThreadPool {
     for (int i = 0; i < n; ++i)
       workers.emplace_back([this] {
         for (;;) {
-          std::packaged_task<ThreadResult()> task;
+          std::function<void()> task;
           {
             std::unique_lock<std::mutex> lock(mtx);
             cv.wait(lock, [this] { return stop || !tasks.empty(); });
@@ -42,10 +40,12 @@ struct ThreadPool {
     for (auto& t : workers) t.join();
   }
 
-  std::future<ThreadResult> submit(std::function<ThreadResult()> fn) {
-    std::packaged_task<ThreadResult()> task(std::move(fn));
-    auto fut = task.get_future();
-    { std::unique_lock<std::mutex> lock(mtx); tasks.push(std::move(task)); }
+  template <typename F>
+  auto submit(F fn) -> std::future<std::invoke_result_t<F>> {
+    using R = std::invoke_result_t<F>;
+    auto task = std::make_shared<std::packaged_task<R()>>(std::move(fn));
+    auto fut = task->get_future();
+    { std::unique_lock<std::mutex> lock(mtx); tasks.push([task] { (*task)(); }); }
     cv.notify_one();
     return fut;
   }

@@ -1,6 +1,5 @@
 #include "../include/horizon_pair_db_generator.hpp"
 #include "../include/thread_pool.hpp"
-#include "../include/pair_wise_bin.hpp" // for thread pool
 #include "../include/drawing.hpp"
 
 #include <atomic>
@@ -115,12 +114,12 @@ void HorizonPairDBGenerator::generate_mdds() {
   };
 
   ThreadPool pool(NUM_OF_THREADS);
-  std::vector<std::future<ThreadResult>> futures;
+  std::vector<std::future<void>> futures;
   futures.reserve(V_SIZE);
 
   // Submit ONE task per start vertex
   for (int v_i = 0; v_i < (int)V_SIZE; v_i++) {
-    futures.push_back(pool.submit([&task, v_i]() { task(v_i); return ThreadResult{}; }));
+    futures.push_back(pool.submit([&task, v_i]() { task(v_i); }));
   }
 
   for (auto& fut : futures) fut.get();
@@ -218,10 +217,10 @@ void HorizonPairDBGenerator::flag_mdds_for_conflicts() {
     print_bar();
   };
 
-  std::vector<std::future<ThreadResult>> futures;
+  std::vector<std::future<void>> futures;
   futures.reserve(mdd_count);
   for (uint32_t mdd_id = 0; mdd_id < mdd_count; mdd_id++)
-    futures.push_back(pool.submit([&task, mdd_id]() { task(mdd_id); return ThreadResult{}; }));
+    futures.push_back(pool.submit([&task, mdd_id]() { task(mdd_id); }));
 
   for (auto& fut : futures) fut.get();
 
@@ -274,10 +273,10 @@ void HorizonPairDBGenerator::generate_sync_time_conflicts() {
     print_bar();
   };
 
-  std::vector<std::future<ThreadResult>> futures;
+  std::vector<std::future<void>> futures;
   futures.reserve(mdd_count);
   for (uint32_t mdd_id = 0; mdd_id < mdd_count; mdd_id++)
-    futures.push_back(pool.submit([&task, mdd_id]() { task(mdd_id); return ThreadResult{}; }));
+    futures.push_back(pool.submit([&task, mdd_id]() { task(mdd_id); }));
 
   for (auto& fut : futures) fut.get();
 
