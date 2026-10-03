@@ -1,6 +1,7 @@
 #include "../include/horizon_pair_db_generator.hpp"
 #include "../include/thread_pool.hpp"
 #include "../include/drawing.hpp"
+#include "../include/moves.hpp"
 
 #include <atomic>
 #include <iomanip>
@@ -130,7 +131,7 @@ void HorizonPairDBGenerator::generate_mdds() {
 }
 
 
-uint8_t HorizonPairDBGenerator::get_conflict_penalty(MDD& mdd1, MDD& mdd2) {
+uint8_t HorizonPairDBGenerator::calculate_sync_time_penalty(MDD& mdd1, MDD& mdd2) {
   if (!mdd1.check_joint_mdd_conflict(mdd2, G))
     return 0;
   MDD mdd1_with_wait = mdd1.get_mdd_with_wait();
@@ -230,6 +231,7 @@ void HorizonPairDBGenerator::flag_mdds_for_conflicts() {
 
 
 void HorizonPairDBGenerator::generate_sync_time_conflicts() {
+  std::cout << "Generating sync-time penalties" << std::endl;
   conflicts.resize(mdd_count);
   std::atomic<uint32_t> num_of_conflicts1 = 0;
   std::atomic<uint32_t> num_of_conflicts2 = 0;
@@ -258,7 +260,7 @@ void HorizonPairDBGenerator::generate_sync_time_conflicts() {
     MDD& mdd = mdd_by_id[mdd_id];
     for (uint32_t other_mdd_id : flagged_for_conflict[mdd_id]) {
       MDD& other_mdd = mdd_by_id[other_mdd_id];
-      uint8_t penalty = get_conflict_penalty(mdd, other_mdd);
+      uint8_t penalty = calculate_sync_time_penalty(mdd, other_mdd);
 
       if (penalty > 0) {
         conflicts[mdd_id][other_mdd_id] = penalty;
@@ -284,6 +286,106 @@ void HorizonPairDBGenerator::generate_sync_time_conflicts() {
   std::cout << "\nNum of conflicts with penalty 1: " << num_of_conflicts1.load() << std::endl;
   std::cout << "Num of conflicts with penalty 2: " << num_of_conflicts2.load() << std::endl;
 }
+
+
+// TODO: this logic only works for grid graphs and won't work for general graphs.
+inline bool check_is_accessible(Vertex* from, Vertex* to) {
+  int dx = std::abs(from->x - to->x);
+  int dy = std::abs(from->y - to->y);
+  return (dx + dy < 2);
+}
+
+MDD create_constrained_move_MDD(MDD& mdd1, Vertex* next_v1) {
+  MDD new_mdd;
+  new_mdd.frontiers.resize(mdd1.frontiers.size());
+  new_mdd.frontiers[0] = mdd1.frontiers[0];
+  new_mdd.frontiers[1] = { next_v1 };
+  for (auto t = 2; t < new_mdd.frontiers.size(); t++) {
+    for (Vertex* mdd1_v : mdd1.frontiers[t]) {
+      // Find whether mdd1_v is accessible
+      bool is_accessible = false;
+      for (Vertex* v_constrained_parent : new_mdd.frontiers[t - 1]) {
+        if (check_is_accessible(v_constrained_parent, mdd1_v)) { is_accessible = true; break; }
+      }
+      if (is_accessible) new_mdd.frontiers[t].push_back(mdd1_v);
+    }
+  }
+  return new_mdd;
+}
+
+
+void HorizonPairDBGenerator::generate_constrained_move_conflicts() {
+  constrained_move_conflicts.resize(mdd_count * NUM_OF_MOVES);
+
+  std::mutex io_mtx; // Protects console progress bar output
+  const uint32_t total = mdd_count;
+  std::atomic<uint32_t> done = 0;
+  const int bar_width = 40;
+
+  auto print_bar = [&]() {
+    std::lock_guard lock(io_mtx);
+    float frac = total > 0 ? (float)done.load() / (float)total : 1.0f;
+    int filled = (int)(frac * bar_width);
+    std::cout << "\r[";
+    for (int k = 0; k < bar_width; ++k) std::cout << (k < filled ? '#' : '-');
+    std::cout << "] " << std::fixed << std::setprecision(2) << (frac * 100.0f) << "%" << std::flush;
+  };
+
+  std::cout << "Calculating reverse conflict flags... " << std::endl;
+  std::vector<std::vector<uint32_t>> reversed_flagged_for_conflict(mdd_count);
+  for (uint32_t mdd1 = 0; mdd1 < mdd_count; mdd1++) {
+    for (uint32_t mdd2 : flagged_for_conflict[mdd1]) {
+      reversed_flagged_for_conflict[mdd2].push_back(mdd1);
+    }
+  }
+
+  std::cout << "Generating constrained move conflicts" << std::endl;
+
+  print_bar();
+  ThreadPool pool(NUM_OF_THREADS);
+
+  // Task processes a SINGLE mdd_id. conflicts[mdd_id] is only ever written by
+  // this task, so no lock is needed for it.
+  auto task = [&](uint32_t mdd_id) {
+    MDD& mdd = mdd_by_id[mdd_id];
+    if (mdd.frontiers[1].size() == 1 && mdd.frontiers[1][0] == mdd.frontiers[0][0]) {
+      ++done;
+      print_bar();
+      return;
+    }
+    for (Vertex* v_next : mdd.frontiers[1]) {
+      MDD constrained_mdd = create_constrained_move_MDD(mdd, v_next);
+      int move = get_move(mdd.frontiers[0][0], v_next);
+      for (uint32_t other_mdd_id : flagged_for_conflict[mdd_id]) {
+        MDD& other_mdd = mdd_by_id[other_mdd_id];
+        uint8_t penalty = calculate_sync_time_penalty(constrained_mdd, other_mdd);
+        if (penalty > 0) {
+          constrained_move_conflicts[mdd_id * NUM_OF_MOVES + move][other_mdd_id] = penalty;
+        }
+      }
+      for (uint32_t other_mdd_id : reversed_flagged_for_conflict[mdd_id]) {
+        MDD& other_mdd = mdd_by_id[other_mdd_id];
+        uint8_t penalty = calculate_sync_time_penalty(constrained_mdd, other_mdd);
+        if (penalty > 0) {
+          constrained_move_conflicts[mdd_id * NUM_OF_MOVES + move][other_mdd_id] = penalty;
+        }
+      }
+    }
+    ++done;
+    print_bar();
+  };
+
+  std::vector<std::future<void>> futures;
+  futures.reserve(mdd_count);
+  for (uint32_t mdd_id = 0; mdd_id < mdd_count; mdd_id++)
+    futures.push_back(pool.submit([&task, mdd_id]() { task(mdd_id); }));
+
+  for (auto& fut : futures) fut.get();
+
+  print_bar(); // Final 100% update
+  std::cout << std::endl;
+}
+
 
 void HorizonPairDBGenerator::interactive_mdd_test() {
   using namespace drawing_detail;
@@ -335,6 +437,30 @@ void HorizonPairDBGenerator::interactive_mdd_test() {
 }
 
 
+uint8_t HorizonPairDBGenerator::get_penalty(Vertex* v1, Vertex* g1, Vertex* v2, Vertex* g2) {
+  uint32_t agent1 = v1->id * V_SIZE + g1->id;
+  uint32_t agent2 = v2->id * V_SIZE + g2->id;
+  uint32_t mdd_id1 = mdd_id_by_v_g[agent1];
+  uint32_t mdd_id2 = mdd_id_by_v_g[agent2];
+  uint32_t min_mdd_id = mdd_id1 < mdd_id2 ? mdd_id1 : mdd_id2;
+  uint32_t max_mdd_id = mdd_id1 > mdd_id2 ? mdd_id1 : mdd_id2;
+  auto& map = conflicts[min_mdd_id];
+  auto entry = map.find(max_mdd_id);
+  return entry == map.end() ? 0 : entry->second;
+};
+
+
+uint8_t HorizonPairDBGenerator::get_constrained_move_penalty(Vertex* v1, Vertex* v1_next, Vertex* g1, Vertex* v2, Vertex* g2) {
+  uint32_t agent1 = v1->id * V_SIZE + g1->id;
+  uint32_t agent2 = v2->id * V_SIZE + g2->id;
+  uint32_t mdd_id1 = mdd_id_by_v_g[agent1];
+  uint32_t mdd_id2 = mdd_id_by_v_g[agent2];
+  auto& map = constrained_move_conflicts[mdd_id1 * NUM_OF_MOVES + get_move(v1, v1_next)];
+  auto entry = map.find(mdd_id2);
+  return entry == map.end() ? 0 : entry->second;
+};
+
+
 void HorizonPairDBGenerator::test_db_1() {
   std::cout << "Running test_db_1" << std::endl;
   std::vector<std::string> grid = {
@@ -342,6 +468,7 @@ void HorizonPairDBGenerator::test_db_1() {
     "...",
     "...",
   };
+
   Graph* G = new Graph(grid);
   HorizonPairDBGenerator DB(G, "test");
   DB.generate_mdds();
@@ -365,18 +492,6 @@ void HorizonPairDBGenerator::test_db_1() {
   auto D_start = A_goal; // swap conflict with A
   auto D_goal  = A_start;
 
-  auto get_penalty = [&](Vertex* v1, Vertex* g1, Vertex* v2, Vertex* g2) {
-    uint32_t agent1 = v1->id * DB.V_SIZE + g1->id;
-    uint32_t agent2 = v2->id * DB.V_SIZE + g2->id;
-    uint32_t mdd_id1 = DB.mdd_id_by_v_g[agent1];
-    uint32_t mdd_id2 = DB.mdd_id_by_v_g[agent2];
-    uint32_t min_mdd_id = mdd_id1 < mdd_id2 ? mdd_id1 : mdd_id2;
-    uint32_t max_mdd_id = mdd_id1 > mdd_id2 ? mdd_id1 : mdd_id2;
-    auto& map = DB.conflicts[min_mdd_id];
-    auto entry = map.find(max_mdd_id);
-    return entry == map.end() ? 0 : entry->second;
-  };
-
   int actual_penalty;
   int expected_penalty;
 
@@ -384,7 +499,7 @@ void HorizonPairDBGenerator::test_db_1() {
   // Test A, B
   //
   expected_penalty = 0;
-  actual_penalty = get_penalty(A_start, A_goal, B_start, B_goal);
+  actual_penalty = DB.get_penalty(A_start, A_goal, B_start, B_goal);
   if (expected_penalty != actual_penalty) {
     std::cout << "Got penalty != 0 for A and B" << std::endl;
     exit(0);
@@ -394,7 +509,7 @@ void HorizonPairDBGenerator::test_db_1() {
   // Test A, C
   //
   expected_penalty = 2;
-  actual_penalty = get_penalty(A_start, A_goal, C_start, C_goal);
+  actual_penalty = DB.get_penalty(A_start, A_goal, C_start, C_goal);
   if (expected_penalty != actual_penalty) {
     std::cout << "Got penalty != 2 for A and C" << std::endl;
     exit(0);
@@ -404,11 +519,195 @@ void HorizonPairDBGenerator::test_db_1() {
   // Test A, D
   //
   expected_penalty = 2;
-  actual_penalty = get_penalty(A_start, A_goal, D_start, D_goal);
+  actual_penalty = DB.get_penalty(A_start, A_goal, D_start, D_goal);
   if (expected_penalty != actual_penalty) {
     std::cout << "Got penalty != 2 for A and D" << std::endl;
     exit(0);
   }
+
+  delete G;
+}
+
+
+void HorizonPairDBGenerator::test_db_time_shift() {
+  std::cout << "Running test_db_time_shift" << std::endl;
+  std::vector<std::string> grid = {
+    ".@.",
+    "...",
+    "...",
+  };
+
+  Graph* G = new Graph(grid);
+  HorizonPairDBGenerator DB(G, "test");
+  DB.generate_mdds();
+  DB.flag_mdds_for_conflicts();
+  DB.generate_constrained_move_conflicts();
+
+  auto coord = [G](int row, int col) {
+    auto index = G->width * row + col;
+    return G->U[index];
+  };
+
+  { // Scenario 1: A follows B (no conflict)
+    auto A_start = coord(0, 0);
+    auto A_next = coord(1, 0);
+    auto A_goal  = coord(1, 2);
+
+    auto B_start = coord(1, 0);
+    auto B_goal  = coord(0, 2);
+
+    int expected_penalty = 0;
+    int actual_penalty = DB.get_constrained_move_penalty(A_start, A_next, A_goal, B_start, B_goal);
+    if (expected_penalty != actual_penalty) {
+      std::cout << "Scenario 1 failed" << std::endl;
+      exit(0);
+    }
+  }
+  std::cout << "Scenario 1 passed" << std::endl;
+
+  { // Scenario 2: B moves first and interfere A
+    auto A_start = coord(0, 0);
+    auto A_goal  = coord(1, 2);
+
+    auto B_start = coord(1, 1);
+    auto B_next = coord(1, 0);
+    auto B_goal  = coord(2, 0);
+
+    int expected_penalty = 2;
+    int actual_penalty = DB.get_constrained_move_penalty(B_start, B_next, B_goal, A_start, B_goal);
+    if (expected_penalty != actual_penalty) {
+      std::cout << "Scenario 2 failed" << std::endl;
+      exit(0);
+    }
+  }
+  std::cout << "Scenario 2 passed" << std::endl;
+
+  { // Scenario 3: A follows B but B's goal is on A's path (conflict)
+    auto A_start = coord(0, 0);
+    auto A_next = coord(1, 0);
+    auto A_goal  = coord(0, 2);
+
+    auto B_start = coord(1, 0);
+    auto B_goal  = coord(1, 2);
+
+    int expected_penalty = 2;
+    int actual_penalty = DB.get_constrained_move_penalty(A_start, A_next, A_goal, B_start, B_goal);
+    if (expected_penalty != actual_penalty) {
+      std::cout << "Scenario 3 failed" << std::endl;
+      exit(0);
+    }
+  }
+  std::cout << "Scenario 3 passed" << std::endl;
+
+  { // Scenario 4: Swap conflict when A pushes B
+    auto A_start = coord(0, 0);
+    auto A_next = coord(1, 0);
+    auto A_goal  = coord(0, 2);
+
+    auto B_start = coord(1, 0);
+    auto B_goal  = coord(0, 0);
+
+    int expected_penalty = 2;
+    int actual_penalty = DB.get_constrained_move_penalty(A_start, A_next, A_goal, B_start, B_goal);
+    if (expected_penalty != actual_penalty) {
+      std::cout << "Scenario 4 failed" << std::endl;
+      exit(0);
+    }
+  }
+  std::cout << "Scenario 4 passed" << std::endl;
+
+  { // Scenario 5: Swap conflict
+    auto A_start = coord(0, 0);
+    auto A_next = coord(1, 0); 
+    auto A_goal  = coord(0, 2);
+
+    auto B_start = coord(0, 2);
+    auto B_goal  = coord(0, 0);
+
+    auto C_start = coord(1, 2);
+    auto C_goal  = coord(0, 0);
+
+    int expected_penalty = 2;
+    int actual_penalty_B = DB.get_constrained_move_penalty(A_start, A_next, A_goal, B_start, B_goal);
+    int actual_penalty_C = DB.get_constrained_move_penalty(A_start, A_next, A_goal, C_start, C_goal);
+    if (expected_penalty != actual_penalty_B) {
+      std::cout << "Scenario 5 failed (B)" << std::endl;
+      exit(0);
+    }
+    if (expected_penalty != actual_penalty_C) {
+      std::cout << "Scenario 5 failed (C)" << std::endl;
+      exit(0);
+    }
+  }
+  std::cout << "Scenario 5 passed" << std::endl;
+
+  delete G;
+}
+
+
+void HorizonPairDBGenerator::test_db_time_shift_2() {
+  std::cout << "Running test_db_time_shift_2" << std::endl;
+  std::vector<std::string> grid = {
+    "....",
+    "....",
+    "....",
+    "....",
+  };
+
+  Graph* G = new Graph(grid);
+  HorizonPairDBGenerator DB(G, "test");
+  DB.generate_mdds();
+  DB.flag_mdds_for_conflicts();
+  DB.generate_constrained_move_conflicts();
+
+  auto coord = [G](int row, int col) {
+    auto index = G->width * row + col;
+    return G->U[index];
+  };
+
+  // The famous vertex conflict example if there is not shift. A wait can resolve this conflict.
+  auto A_start = coord(1, 0);
+  auto A_goal  = coord(2, 3);
+
+  auto B_start = coord(0, 1);
+  auto B_goal  = coord(3, 2);
+
+  { // Scenario 1: No conflict when shifting B
+    auto A_next = coord(2, 0);
+    auto B_start = coord(0, 2);
+
+    int expected_penalty = 0;
+    int actual_penalty = DB.get_constrained_move_penalty(A_start, A_next, A_goal, B_start, B_goal);
+    if (expected_penalty != actual_penalty) {
+      std::cout << "Scenario 1 failed" << std::endl;
+      exit(0);
+    }
+  }
+  std::cout << "Scenario 1 passed" << std::endl;
+
+  { // Scenario 2: A conflict if A moves down
+    auto A_next = coord(2, 0);
+
+    int expected_penalty = 1;
+    int actual_penalty = DB.get_constrained_move_penalty(A_start, A_next, A_goal, B_start, B_goal);
+    if (expected_penalty != actual_penalty) {
+      std::cout << "Scenario 2 failed" << std::endl;
+      exit(0);
+    }
+  }
+  std::cout << "Scenario 2 passed" << std::endl;
+
+  { // Scenario 3: A conflict if A moves right
+    auto A_next = coord(1, 1);
+
+    int expected_penalty = 1;
+    int actual_penalty = DB.get_constrained_move_penalty(A_start, A_next, A_goal, B_start, B_goal);
+    if (expected_penalty != actual_penalty) {
+      std::cout << "Scenario 3 failed" << std::endl;
+      exit(0);
+    }
+  }
+  std::cout << "Scenario 3 passed" << std::endl;
 
   delete G;
 }

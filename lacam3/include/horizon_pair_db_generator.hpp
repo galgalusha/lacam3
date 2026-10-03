@@ -38,10 +38,17 @@ struct HorizonPairDBGenerator {
   // should have the same value as conflicts[10][50]
   std::vector<absl::flat_hash_map<uint32_t, uint8_t>> conflicts;
 
+  // The index here is NUM_OF_MOVES * mdd_id + move (see moves.hpp).
+  std::vector<absl::flat_hash_map<uint32_t, uint8_t>> constrained_move_conflicts;
+
   // flagged_for_conflict[mdd_id] holds the ids (> mdd_id) of other MDDs whose
   // frontiers overlap in space-time with mdd_id's, as discovered by
   // flag_mdds_for_conflicts(). No penalties are computed at this stage.
   std::vector<std::vector<uint32_t>> flagged_for_conflict;
+
+  // For unit tests
+  uint8_t get_penalty(Vertex* v1, Vertex* g1, Vertex* v2, Vertex* g2);
+  uint8_t get_constrained_move_penalty(Vertex* v1_0, Vertex* v1_1, Vertex* g1, Vertex* v2, Vertex* g2);
 
   void generate_mdds();
 
@@ -53,7 +60,9 @@ struct HorizonPairDBGenerator {
   // flagged pair via check_joint_mdd_conflict and populating conflicts.
   void generate_sync_time_conflicts();
 
-  uint8_t get_conflict_penalty(MDD& mdd1, MDD& mdd2);
+  void generate_constrained_move_conflicts();
+
+  uint8_t calculate_sync_time_penalty(MDD& mdd1, MDD& mdd2);
 
   // Prompts the user for (v_i, g_i), renders the resulting MDD, and repeats
   // indefinitely until the process is killed.
@@ -76,4 +85,6 @@ struct HorizonPairDBGenerator {
   void write_conflicts_section(std::ofstream& out);
 
   static void test_db_1();
+  static void test_db_time_shift();
+  static void test_db_time_shift_2();
 };

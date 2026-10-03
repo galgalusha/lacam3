@@ -176,6 +176,8 @@ int main(int argc, char *argv[])
 //   MDD::test_joint_mdd_with_wait();
 //   MDD::test_joint_mdd_with_wait2();
 //   HorizonPairDBGenerator::test_db_1();
+//   HorizonPairDBGenerator::test_db_time_shift();
+//   HorizonPairDBGenerator::test_db_time_shift_2();
 //   exit(0);
   
 
