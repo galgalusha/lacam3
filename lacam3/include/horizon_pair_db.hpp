@@ -43,6 +43,9 @@ struct HorizonPairDB {
   // Also, it should be symmetrical so if mdd1 contains mdd2, mdd2 shall contain mdd1.
   std::vector<std::vector<MDD_Penalty>> penalties;
 
+  // The index here is NUM_OF_MOVES * mdd_id + move (see moves.hpp).
+  std::vector<std::vector<MDD_Penalty>> constrained_move_penalties;
+
   // Populates mdd_by_id, mdd_id_by_v_g and conflicts from the file written by
   // HorizonPairDBGenerator::save_to_file(), running sanity checks along the
   // way. Returns false on I/O failure or if a sanity check fails.
@@ -57,6 +60,8 @@ struct HorizonPairDB {
   bool read_mdd_id_by_v_g_section(std::ifstream& in);
 
   bool read_conflicts_section(std::ifstream& in);
+
+  bool read_move_constrained_conflicts_section(std::ifstream& in);
 
   // Compares penalties[mdd_id] of this DB against other_db for every mdd_id,
   // printing any mismatch (missing/extra entries) and returning early. Prints
@@ -78,4 +83,6 @@ struct HorizonPairDB {
     uint32_t mdd_id2 = mdd_id_by_v_g[agent2];
     return get_penalty(mdd_id1, mdd_id2);
   }
+
+  static void integration_test1();
 };

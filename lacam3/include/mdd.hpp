@@ -46,9 +46,10 @@ struct MDD {
     return h;
   }
 
-  bool check_joint_mdd_conflict(MDD& other_mdd, Graph* G);
+  bool check_joint_mdd_conflict(MDD& other_mdd, Graph* G, int horizon, int time_shift_me = 0, int time_shift_other = 0);
 
   MDD get_mdd_with_wait();
+  MDD get_mdd_with_wait_at_time_1();
 
   static void test_joint_mdd();
   static void test_joint_mdd2();

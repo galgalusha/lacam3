@@ -13,7 +13,7 @@ enum Move {
 
 const int NUM_OF_MOVES = 4;
 
-Move get_move(Vertex* v1, Vertex* v2) {
+inline Move get_move(Vertex* v1, Vertex* v2) {
   int dx = v2->x - v1->x;
   int dy = v2->y - v1->y;
   if (dx == -1 && dy == 0) return LEFT;

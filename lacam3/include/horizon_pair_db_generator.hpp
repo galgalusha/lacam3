@@ -11,7 +11,8 @@
 // the result via save_to_file() to be loaded at runtime by HorizonPairDB.
 struct HorizonPairDBGenerator {
 
-  static const int HORIZON;
+  static int HORIZON;
+  static int MDD_SIZE;
   Graph* G;
   DistTable* D;
   size_t V_SIZE;
@@ -63,6 +64,7 @@ struct HorizonPairDBGenerator {
   void generate_constrained_move_conflicts();
 
   uint8_t calculate_sync_time_penalty(MDD& mdd1, MDD& mdd2);
+  uint8_t calculate_constrained_move_penalty(MDD& constrained_mdd, MDD& other_mdd);
 
   // Prompts the user for (v_i, g_i), renders the resulting MDD, and repeats
   // indefinitely until the process is killed.
@@ -83,6 +85,8 @@ struct HorizonPairDBGenerator {
   void write_mdd_id_by_v_g_section(std::ofstream& out);
 
   void write_conflicts_section(std::ofstream& out);
+
+  void write_constrained_move_conflicts_section(std::ofstream& out);
 
   static void test_db_1();
   static void test_db_time_shift();

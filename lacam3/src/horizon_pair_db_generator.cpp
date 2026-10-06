@@ -15,7 +15,16 @@
 #include <absl/container/flat_hash_set.h>
 
 
-const int HorizonPairDBGenerator::HORIZON = 5;
+// Number of steps ahead we are aware of
+int HorizonPairDBGenerator::HORIZON = 5;
+
+// MDD::frontiers[0] is the start vertex (time 0).
+// This is why we add 1 to HORIZON.
+// Given two MDDs aligned to the same time, we look up to frontiers[HORIZON + 1].
+// When comparing time shifted MDDs, the shifted one needs to look forward an extra step.
+// Thats why we add another 1.
+int HorizonPairDBGenerator::MDD_SIZE = HorizonPairDBGenerator::HORIZON + 2;
+
 static const int NUM_OF_THREADS = 8;
 
 
@@ -38,7 +47,7 @@ void HorizonPairDBGenerator::generate_mdds() {
   // Pre-allocate master storage
   mdd_id_by_v_g.assign(V_SIZE * V_SIZE, 0);
   mdd_by_id.resize(V_SIZE * V_SIZE);
-  mdd_by_t_s.assign(V_SIZE * (HORIZON + 1), std::vector<uint32_t>());
+  mdd_by_t_s.assign(V_SIZE * MDD_SIZE, std::vector<uint32_t>());
 
   std::mutex mdd_count_mtx; // Only used to safely increment the global ID
   std::mutex mdd_mtx2;      // Protects push_back on mdd_by_t_s
@@ -68,7 +77,7 @@ void HorizonPairDBGenerator::generate_mdds() {
       int agent_id = v_i * (int)V_SIZE + g_i;
       
       MDD mdd; 
-      mdd.populate(D, G->V[v_i], G->V[g_i], HORIZON);
+      mdd.populate(D, G->V[v_i], G->V[g_i], MDD_SIZE);
       
       uint32_t mdd_id;
       bool is_new_mdd = false;
@@ -132,13 +141,24 @@ void HorizonPairDBGenerator::generate_mdds() {
 
 
 uint8_t HorizonPairDBGenerator::calculate_sync_time_penalty(MDD& mdd1, MDD& mdd2) {
-  if (!mdd1.check_joint_mdd_conflict(mdd2, G))
+  if (!mdd1.check_joint_mdd_conflict(mdd2, G, HORIZON))
     return 0;
-  MDD mdd1_with_wait = mdd1.get_mdd_with_wait();
-  if (!mdd1_with_wait.check_joint_mdd_conflict(mdd2, G))
+  if (!mdd1.check_joint_mdd_conflict(mdd2, G, HORIZON, 1, 0))
     return 1;
-  MDD mdd2_with_wait = mdd2.get_mdd_with_wait();
-  if (!mdd2_with_wait.check_joint_mdd_conflict(mdd1, G))
+  if (!mdd1.check_joint_mdd_conflict(mdd2, G, HORIZON, 0, 1))
+    return 1;
+  return 2;
+}
+
+
+uint8_t HorizonPairDBGenerator::calculate_constrained_move_penalty(MDD& constrained_mdd, MDD& other_mdd) {
+  if (!constrained_mdd.check_joint_mdd_conflict(other_mdd, G, HORIZON))
+    return 0;
+  MDD mdd1_with_wait = constrained_mdd.get_mdd_with_wait_at_time_1();
+  if (!mdd1_with_wait.check_joint_mdd_conflict(other_mdd, G, HORIZON))
+    return 1;
+  MDD mdd2_with_wait = other_mdd.get_mdd_with_wait();
+  if (!mdd2_with_wait.check_joint_mdd_conflict(constrained_mdd, G, HORIZON))
     return 1;
   return 2;
 }
@@ -182,20 +202,26 @@ void HorizonPairDBGenerator::flag_mdds_for_conflicts() {
 
     MDD& mdd = mdd_by_id[mdd_id];
     std::vector<uint32_t>& flagged = flagged_for_conflict[mdd_id];
-    for (int t = 0; t <= HORIZON; t++) {
+    for (int t = 0; t < MDD_SIZE; t++) {
       for (Vertex* v : mdd.frontiers[t]) {
         
         int NUM_OF_TIME_SHIFTS = 1;
-        std::vector<uint32_t>* timeshift_to_other_mdds[2]; 
+        std::vector<uint32_t>* timeshift_to_other_mdds[3]; 
         size_t t_s = static_cast<size_t>(t) * G->V.size() + v->id;
         timeshift_to_other_mdds[0] = &mdd_by_t_s[t_s];
         
-        if (t < HORIZON) {
-          NUM_OF_TIME_SHIFTS++;
+        if (t < MDD_SIZE - 1) {
           size_t t_plus_1_s = static_cast<size_t>(t + 1) * G->V.size() + v->id;
-          timeshift_to_other_mdds[1] = &mdd_by_t_s[t_plus_1_s];
+          timeshift_to_other_mdds[NUM_OF_TIME_SHIFTS] = &mdd_by_t_s[t_plus_1_s];
+          NUM_OF_TIME_SHIFTS++;
         }
         
+        if (t > 0) {
+          size_t t_minus_1_s = static_cast<size_t>(t - 1) * G->V.size() + v->id;
+          timeshift_to_other_mdds[NUM_OF_TIME_SHIFTS] = &mdd_by_t_s[t_minus_1_s];
+          NUM_OF_TIME_SHIFTS++;
+        }
+
         for (int dt = 0; dt < NUM_OF_TIME_SHIFTS; dt++) {
           std::vector<uint32_t>& mdd_set = *timeshift_to_other_mdds[dt];
 
@@ -271,8 +297,9 @@ void HorizonPairDBGenerator::generate_sync_time_conflicts() {
       }
     }
 
-    ++done;
-    print_bar();
+    uint32_t current_done = ++done;
+    if (current_done % 100 == 0)
+      print_bar();
   };
 
   std::vector<std::future<void>> futures;
@@ -358,14 +385,14 @@ void HorizonPairDBGenerator::generate_constrained_move_conflicts() {
       int move = get_move(mdd.frontiers[0][0], v_next);
       for (uint32_t other_mdd_id : flagged_for_conflict[mdd_id]) {
         MDD& other_mdd = mdd_by_id[other_mdd_id];
-        uint8_t penalty = calculate_sync_time_penalty(constrained_mdd, other_mdd);
+        uint8_t penalty = calculate_constrained_move_penalty(constrained_mdd, other_mdd);
         if (penalty > 0) {
           constrained_move_conflicts[mdd_id * NUM_OF_MOVES + move][other_mdd_id] = penalty;
         }
       }
       for (uint32_t other_mdd_id : reversed_flagged_for_conflict[mdd_id]) {
         MDD& other_mdd = mdd_by_id[other_mdd_id];
-        uint8_t penalty = calculate_sync_time_penalty(constrained_mdd, other_mdd);
+        uint8_t penalty = calculate_constrained_move_penalty(constrained_mdd, other_mdd);
         if (penalty > 0) {
           constrained_move_conflicts[mdd_id * NUM_OF_MOVES + move][other_mdd_id] = penalty;
         }
@@ -722,6 +749,7 @@ void HorizonPairDBGenerator::write_header(std::ofstream& out, const HorizonPairD
   out.write(reinterpret_cast<const char*>(&header.offset_mdd_by_id), sizeof(header.offset_mdd_by_id));
   out.write(reinterpret_cast<const char*>(&header.offset_mdd_id_by_v_g), sizeof(header.offset_mdd_id_by_v_g));
   out.write(reinterpret_cast<const char*>(&header.offset_conflicts), sizeof(header.offset_conflicts));
+  out.write(reinterpret_cast<const char*>(&header.offset_constrained_move_conflicts), sizeof(header.offset_constrained_move_conflicts));
 }
 
 // Frontier vertices are stored as v->id (index into G->V), not v->index.
@@ -775,6 +803,23 @@ void HorizonPairDBGenerator::write_conflicts_section(std::ofstream& out) {
   std::cout << std::endl;
 }
 
+void HorizonPairDBGenerator::write_constrained_move_conflicts_section(std::ofstream& out) {
+  std::cout << "Saving constrained move conflicts..." << std::endl;
+  const uint32_t num_entries_outer = static_cast<uint32_t>(constrained_move_conflicts.size());
+  out.write(reinterpret_cast<const char*>(&num_entries_outer), sizeof(num_entries_outer));
+  for (uint32_t id = 0; id < num_entries_outer; id++) {
+    const auto& map = constrained_move_conflicts[id];
+    uint32_t num_entries = static_cast<uint32_t>(map.size());
+    out.write(reinterpret_cast<const char*>(&num_entries), sizeof(num_entries));
+    for (const auto& [key, value] : map) {
+      out.write(reinterpret_cast<const char*>(&key), sizeof(key));
+      out.write(reinterpret_cast<const char*>(&value), sizeof(value));
+    }
+    if (id % 256 == 0 || id + 1 == num_entries_outer) print_horizon_pair_db_progress_bar(id + 1, num_entries_outer);
+  }
+  std::cout << std::endl;
+}
+
 bool HorizonPairDBGenerator::save_to_file() {
   std::filesystem::create_directories(HORIZON_PAIR_DB_ROOT_FOLDER);
   const std::string path = HORIZON_PAIR_DB_ROOT_FOLDER + name + HORIZON_PAIR_DB_FILE_EXTENSION;
@@ -784,7 +829,7 @@ bool HorizonPairDBGenerator::save_to_file() {
     return false;
   }
 
-  HorizonPairDBFileHeader header{mdd_count, 0, 0, 0};
+  HorizonPairDBFileHeader header{mdd_count, 0, 0, 0, 0};
   write_header(out, header);  // placeholder, patched with real offsets below
 
   header.offset_mdd_by_id = static_cast<uint64_t>(out.tellp());
@@ -795,6 +840,9 @@ bool HorizonPairDBGenerator::save_to_file() {
 
   header.offset_conflicts = static_cast<uint64_t>(out.tellp());
   write_conflicts_section(out);
+
+  header.offset_constrained_move_conflicts = static_cast<uint64_t>(out.tellp());
+  write_constrained_move_conflicts_section(out);
 
   out.seekp(0);
   write_header(out, header);

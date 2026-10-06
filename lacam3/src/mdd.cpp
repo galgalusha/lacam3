@@ -95,9 +95,25 @@ MDD MDD::get_mdd_with_wait() {
 }
 
 
-bool MDD::check_joint_mdd_conflict(MDD& other_mdd, Graph* G) {
-    if (frontiers.empty() || other_mdd.frontiers.empty()) return true;
-    if (frontiers[0][0] == other_mdd.frontiers[0][0]) return true;
+MDD MDD::get_mdd_with_wait_at_time_1() {
+  MDD new_mdd;
+  new_mdd.frontiers.resize(frontiers.size());
+  new_mdd.frontiers[0] = frontiers[0];
+  new_mdd.frontiers[1] = frontiers[1];
+
+  for (int t = 2; t < frontiers.size(); t++) {
+    new_mdd.frontiers[t] = frontiers[t - 1];
+  }
+  return new_mdd;
+}
+
+bool MDD::check_joint_mdd_conflict(MDD& other_mdd, Graph* G, int horizon, int dt_me, int dt_other) {
+    if (horizon + dt_me > frontiers.size()) {
+      throw std::runtime_error("this->frontiers is too small for joint comparison");
+    }
+    if (horizon + dt_other > other_mdd.frontiers.size()) {
+      throw std::runtime_error("other->frontiers is too small for joint comparison");
+    }
 
     std::vector<Vertex*> u1_self_vector({ nullptr });
     std::vector<Vertex*> u2_self_vector({ nullptr });
@@ -106,9 +122,13 @@ bool MDD::check_joint_mdd_conflict(MDD& other_mdd, Graph* G) {
     thread_local std::vector<std::pair<Vertex*, Vertex*>> next_layer;
     
     current_layer.clear();
-    current_layer.push_back({frontiers[0][0], other_mdd.frontiers[0][0]});
-
-    int min_t = std::min(frontiers.size(), other_mdd.frontiers.size());
+    for (Vertex* v1 : frontiers[dt_me]) {
+      for (Vertex* v2 : other_mdd.frontiers[dt_other]) {
+        if (v1 != v2)
+          current_layer.push_back({ v1, v2 });
+      }
+    }
+    if (current_layer.size() == 0) return true;
 
     // Allocate once per thread, reuse endlessly
     thread_local std::vector<bool> in_f1;
@@ -122,14 +142,16 @@ bool MDD::check_joint_mdd_conflict(MDD& other_mdd, Graph* G) {
     bool is_1_waiting = false;
     bool is_2_waiting = false;
 
-    for (int t = 1; t < min_t; ++t) {
+    for (int time = 1; time < horizon; ++time) {
+        int t1 = time + dt_me;
+        int t2 = time + dt_other;
         next_layer.clear();
 
-        is_1_waiting = frontiers[t].size() == 1 && frontiers[t-1].size() == 1 && frontiers[t][0] == frontiers[t-1][0];
-        is_2_waiting = other_mdd.frontiers[t].size() == 1 && other_mdd.frontiers[t-1].size() == 1 && other_mdd.frontiers[t][0] == other_mdd.frontiers[t-1][0];
+        is_1_waiting = frontiers[t1].size() == 1 && frontiers[t1-1].size() == 1 && frontiers[t1][0] == frontiers[t1-1][0];
+        is_2_waiting = other_mdd.frontiers[t2].size() == 1 && other_mdd.frontiers[t2-1].size() == 1 && other_mdd.frontiers[t2][0] == other_mdd.frontiers[t2-1][0];
 
-        for (Vertex* v : frontiers[t]) in_f1[v->id] = true;
-        for (Vertex* v : other_mdd.frontiers[t]) in_f2[v->id] = true;
+        for (Vertex* v : frontiers[t1]) in_f1[v->id] = true;
+        for (Vertex* v : other_mdd.frontiers[t2]) in_f2[v->id] = true;
 
         for (const auto& pair : current_layer) {
             Vertex* u1 = pair.first;
@@ -156,8 +178,8 @@ bool MDD::check_joint_mdd_conflict(MDD& other_mdd, Graph* G) {
         }
 
         // Cleanup
-        for (Vertex* v : frontiers[t]) in_f1[v->id] = false;
-        for (Vertex* v : other_mdd.frontiers[t]) in_f2[v->id] = false;
+        for (Vertex* v : frontiers[t1]) in_f1[v->id] = false;
+        for (Vertex* v : other_mdd.frontiers[t2]) in_f2[v->id] = false;
 
         if (next_layer.empty()) return true; 
 
@@ -209,7 +231,7 @@ void MDD::test_joint_mdd() {
   mdd_A.populate(D, A_start, A_goal, 5);
   mdd_B.populate(D, B_start, B_goal, 5);
 
-  bool actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B, G);
+  bool actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B, G, 10);
   bool expected_conflict = true;
 
   if (actual_conflict != expected_conflict) {
@@ -223,7 +245,7 @@ void MDD::test_joint_mdd() {
   MDD mdd_C;
   mdd_C.populate(D, C_start, C_goal, 5);
 
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_C, G);
+  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_C, G, 10);
   expected_conflict = false;
 
   if (actual_conflict != expected_conflict) {
@@ -280,7 +302,7 @@ void MDD::test_joint_mdd2() {
   mdd_D.populate(D, D_start, D_goal, 5);
   mdd_E.populate(D, E_start, E_goal, 5);
 
-  bool actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B, G);
+  bool actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B, G, 10);
   bool expected_conflict = false;
 
   if (actual_conflict != expected_conflict) {
@@ -288,7 +310,7 @@ void MDD::test_joint_mdd2() {
     exit(0);
   }
 
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_C, G);
+  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_C, G, 10);
   expected_conflict = true;
 
   if (actual_conflict != expected_conflict) {
@@ -296,7 +318,7 @@ void MDD::test_joint_mdd2() {
     exit(0);
   }
 
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_D, G);
+  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_D, G, 10);
   expected_conflict = true;
 
   if (actual_conflict != expected_conflict) {
@@ -304,7 +326,7 @@ void MDD::test_joint_mdd2() {
     exit(0);
   }
 
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_E, G);
+  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_E, G, 10);
   expected_conflict = true;
 
   if (actual_conflict != expected_conflict) {
@@ -346,7 +368,7 @@ void MDD::test_joint_mdd_with_wait() {
   mdd_A.populate(D, A_start, A_goal, 5);
   mdd_B.populate(D, B_start, B_goal, 5); mdd_B = mdd_B.get_mdd_with_wait();
 
-  bool actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B, G);
+  bool actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B, G, 10);
   bool expected_conflict = false;
 
   if (actual_conflict != expected_conflict) {
@@ -360,7 +382,7 @@ void MDD::test_joint_mdd_with_wait() {
   MDD mdd_C;
   mdd_C.populate(D, C_start, C_goal, 5); mdd_C = mdd_C.get_mdd_with_wait();
 
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_C, G);
+  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_C, G, 10);
   expected_conflict = true;
 
   if (actual_conflict != expected_conflict) {
@@ -416,7 +438,7 @@ void MDD::test_joint_mdd_with_wait2() {
   mdd_D.populate(D, D_start, D_goal, 5); mdd_D = mdd_D.get_mdd_with_wait();
   mdd_E.populate(D, E_start, E_goal, 5); mdd_E = mdd_E.get_mdd_with_wait();
 
-  bool actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B, G);
+  bool actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B, G, 10);
   bool expected_conflict = true;
 
   if (actual_conflict != expected_conflict) {
@@ -424,7 +446,7 @@ void MDD::test_joint_mdd_with_wait2() {
     exit(0);
   }
 
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_C, G);
+  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_C, G, 10);
   expected_conflict = true;
 
   if (actual_conflict != expected_conflict) {
@@ -432,7 +454,7 @@ void MDD::test_joint_mdd_with_wait2() {
     exit(0);
   }
 
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_D, G);
+  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_D, G, 10);
   expected_conflict = true;
 
   if (actual_conflict != expected_conflict) {
@@ -440,7 +462,7 @@ void MDD::test_joint_mdd_with_wait2() {
     exit(0);
   }
 
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_E, G);
+  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_E, G, 10);
   expected_conflict = true;
 
   if (actual_conflict != expected_conflict) {

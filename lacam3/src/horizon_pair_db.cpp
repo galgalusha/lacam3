@@ -1,4 +1,5 @@
 #include "../include/horizon_pair_db.hpp"
+#include "../include/moves.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -56,6 +57,7 @@ bool HorizonPairDB::read_header(std::ifstream& in, HorizonPairDBFileHeader& head
   in.read(reinterpret_cast<char*>(&header.offset_mdd_by_id), sizeof(header.offset_mdd_by_id));
   in.read(reinterpret_cast<char*>(&header.offset_mdd_id_by_v_g), sizeof(header.offset_mdd_id_by_v_g));
   in.read(reinterpret_cast<char*>(&header.offset_conflicts), sizeof(header.offset_conflicts));
+  in.read(reinterpret_cast<char*>(&header.offset_constrained_move_conflicts), sizeof(header.offset_constrained_move_conflicts));
   return static_cast<bool>(in);
 }
 
@@ -150,9 +152,40 @@ bool HorizonPairDB::read_conflicts_section(std::ifstream& in) {
   std::cout << std::endl;
   print_conflict_entry_stats(entries_per_map);
 
-  const uint32_t debug_mdd_id = 15151;
-  if (debug_mdd_id < conflicts.size())
-    print_conflict_entries(debug_mdd_id, conflicts[debug_mdd_id]);
+  // const uint32_t debug_mdd_id = 15151;
+  // if (debug_mdd_id < conflicts.size())
+  //   print_conflict_entries(debug_mdd_id, conflicts[debug_mdd_id]);
+  return true;
+}
+
+bool HorizonPairDB::read_move_constrained_conflicts_section(std::ifstream& in) {
+  std::cout << "Loading constrained move conflicts..." << std::endl;
+  uint32_t num_entries_outer;
+  in.read(reinterpret_cast<char*>(&num_entries_outer), sizeof(num_entries_outer));
+  if (!in || num_entries_outer != mdd_count * NUM_OF_MOVES) {
+    std::cerr << "HorizonPairDB::read_move_constrained_conflicts_section: count mismatch, expected "
+              << mdd_count * NUM_OF_MOVES << " got " << num_entries_outer << std::endl;
+    return false;
+  }
+
+  constrained_move_penalties.assign(num_entries_outer, {});
+  for (uint32_t id = 0; id < num_entries_outer; id++) {
+    uint32_t num_entries;
+    in.read(reinterpret_cast<char*>(&num_entries), sizeof(num_entries));
+    if (!in) return false;
+    auto& entries = constrained_move_penalties[id];
+    entries.reserve(num_entries);
+    for (uint32_t e = 0; e < num_entries; e++) {
+      uint32_t key;
+      uint8_t value;
+      in.read(reinterpret_cast<char*>(&key), sizeof(key));
+      in.read(reinterpret_cast<char*>(&value), sizeof(value));
+      if (!in) return false;
+      entries.push_back({key, value});
+    }
+    if (id % 256 == 0 || id + 1 == num_entries_outer) print_horizon_pair_db_progress_bar(id + 1, num_entries_outer);
+  }
+  std::cout << std::endl;
   return true;
 }
 
@@ -179,6 +212,9 @@ bool HorizonPairDB::load_from_file() {
 
   in.seekg(header.offset_conflicts);
   if (!read_conflicts_section(in)) return false;
+
+  in.seekg(header.offset_constrained_move_conflicts);
+  if (!read_move_constrained_conflicts_section(in)) return false;
 
   std::cout << "Loaded HorizonPairDB from " << path << std::endl;
   return true;

@@ -167,6 +167,7 @@ int main(int argc, char *argv[])
     db->generate_mdds();
     db->flag_mdds_for_conflicts();
     db->generate_sync_time_conflicts();
+    // db->generate_constrained_move_conflicts();
     db->save_to_file();
     exit(0);
   }
@@ -178,6 +179,7 @@ int main(int argc, char *argv[])
 //   HorizonPairDBGenerator::test_db_1();
 //   HorizonPairDBGenerator::test_db_time_shift();
 //   HorizonPairDBGenerator::test_db_time_shift_2();
+//   HorizonPairDB::integration_test1();
 //   exit(0);
   
 
