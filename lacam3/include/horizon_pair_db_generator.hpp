@@ -1,8 +1,8 @@
 #pragma once
 
 #include "mdd.hpp"
+#include "horizon_pair_db.hpp"
 #include "horizon_pair_db_file.hpp"
-#include <absl/container/flat_hash_map.h>
 #include <fstream>
 
 
@@ -10,6 +10,7 @@
 // (start, goal) pair, computes pairwise conflict penalties, and serializes
 // the result via save_to_file() to be loaded at runtime by HorizonPairDB.
 struct HorizonPairDBGenerator {
+  using MDD_Penalty = HorizonPairDB::MDD_Penalty;
 
   static int HORIZON;
   static int MDD_SIZE;
@@ -32,15 +33,11 @@ struct HorizonPairDBGenerator {
   // where the index is t * (G->V.size()) + vertex_id.
   std::vector<std::vector<uint32_t>> mdd_by_t_s;
 
-  // This maps an MDD id to its conflicting MDDs so that conflicts[id1][id2]
-  // only contains an entry if there is a conclict with a penalty > 0. The
-  // value of the entry is the penalty.
-  // It is assumed that id1 < id2 so we don't need to store conflicts[50][10] which
-  // should have the same value as conflicts[10][50]
-  std::vector<absl::flat_hash_map<uint32_t, uint8_t>> conflicts;
+  // Stores only positive-penalty pairs with mdd_id < entry.mdd_id.
+  std::vector<std::vector<MDD_Penalty>> penalties;
 
   // The index here is NUM_OF_MOVES * mdd_id + move (see moves.hpp).
-  std::vector<absl::flat_hash_map<uint32_t, uint8_t>> constrained_move_conflicts;
+  std::vector<std::vector<MDD_Penalty>> constrained_move_penalties;
 
   // flagged_for_conflict[mdd_id] holds the ids (> mdd_id) of other MDDs whose
   // frontiers overlap in space-time with mdd_id's, as discovered by
@@ -58,7 +55,7 @@ struct HorizonPairDBGenerator {
   void flag_mdds_for_conflicts();
 
   // Consumes flagged_for_conflict, computing the actual penalty for each
-  // flagged pair via check_joint_mdd_conflict and populating conflicts.
+  // flagged pair via check_joint_mdd_conflict and populating penalties.
   void generate_sync_time_conflicts();
 
   void generate_constrained_move_conflicts();
@@ -70,7 +67,7 @@ struct HorizonPairDBGenerator {
   // indefinitely until the process is killed.
   void interactive_mdd_test();
 
-  // Serializes mdd_by_id, mdd_id_by_v_g and conflicts to
+  // Serializes mdd_by_id, mdd_id_by_v_g and penalties to
   // ROOT_FOLDER + name + ".mdd_db". Returns false on I/O failure.
   // mdd_by_t_s and flagged_for_conflict are not persisted since they are only
   // temporary build utilities.

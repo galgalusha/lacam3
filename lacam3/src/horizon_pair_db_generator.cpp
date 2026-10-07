@@ -4,6 +4,9 @@
 #include "../include/moves.hpp"
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <thread>
 #include <iomanip>
 #include <mutex>
 #include <algorithm>
@@ -26,6 +29,42 @@ int HorizonPairDBGenerator::HORIZON = 5;
 int HorizonPairDBGenerator::MDD_SIZE = HorizonPairDBGenerator::HORIZON + 2;
 
 static const int NUM_OF_THREADS = 8;
+
+// Runs a dedicated thread that redraws the progress bar at a fixed rate while
+// workers only bump the atomic counter. The calling thread waits for all
+// futures (rethrowing any task exception) and then stops the printer.
+template <typename T>
+static void wait_with_progress(std::vector<std::future<void>>& futures, const std::atomic<T>& done, size_t total) {
+  std::mutex mtx;
+  std::condition_variable cv;
+  bool stop = false;
+
+  std::thread printer([&]() {
+    std::unique_lock lock(mtx);
+    while (!stop) {
+      print_horizon_pair_db_progress_bar(done.load(), total);
+      cv.wait_for(lock, std::chrono::milliseconds(100), [&]() { return stop; });
+    }
+  });
+
+  auto stop_printer = [&]() {
+    {
+      std::lock_guard lock(mtx);
+      stop = true;
+    }
+    cv.notify_one();
+    printer.join();
+  };
+
+  try {
+    for (auto& fut : futures) fut.get();
+  } catch (...) {
+    stop_printer();
+    throw;
+  }
+  stop_printer();
+  print_horizon_pair_db_progress_bar(total, total);
+}
 
 
 static DistTable* create_dist_table(Graph* G) {
@@ -51,22 +90,10 @@ void HorizonPairDBGenerator::generate_mdds() {
 
   std::mutex mdd_count_mtx; // Only used to safely increment the global ID
   std::mutex mdd_mtx2;      // Protects push_back on mdd_by_t_s
-  std::mutex io_mtx;        // Protects console output
 
   const long long total = (long long)V_SIZE * (long long)V_SIZE;
   std::atomic done = 0;
-  const int bar_width = 40;
 
-  auto print_bar = [&]() {
-    std::lock_guard lock(io_mtx);
-    float frac = total > 0 ? (float)done.load() / (float)total : 1.0f;
-    int filled = (int)(frac * bar_width);
-    std::cout << "\r[";
-    for (int k = 0; k < bar_width; ++k) std::cout << (k < filled ? '#' : '-');
-    std::cout << "] " << std::fixed << std::setprecision(2) << (frac * 100.0f) << "%" << std::flush;
-  };
-
-  print_bar();
 
   // Task processes an ENTIRE start vertex (v_i)
   auto task = [&](int v_i) {
@@ -120,7 +147,6 @@ void HorizonPairDBGenerator::generate_mdds() {
     }
     
     // Update progress bar once per start vertex instead of every inner loop
-    print_bar(); 
   };
 
   ThreadPool pool(NUM_OF_THREADS);
@@ -132,9 +158,7 @@ void HorizonPairDBGenerator::generate_mdds() {
     futures.push_back(pool.submit([&task, v_i]() { task(v_i); }));
   }
 
-  for (auto& fut : futures) fut.get();
-
-  print_bar(); // Final 100% update
+  wait_with_progress(futures, done, total);
   std::cout << "\nNum of agents: " << V_SIZE * V_SIZE << std::endl;
   std::cout << "Num of MDDs  : " << mdd_count << std::endl;
 }
@@ -167,21 +191,9 @@ uint8_t HorizonPairDBGenerator::calculate_constrained_move_penalty(MDD& constrai
 void HorizonPairDBGenerator::flag_mdds_for_conflicts() {
   flagged_for_conflict.assign(mdd_count, {});
 
-  std::mutex io_mtx; // Protects console progress bar output
   const uint32_t total = mdd_count;
   std::atomic<uint32_t> done = 0;
-  const int bar_width = 40;
 
-  auto print_bar = [&]() {
-    std::lock_guard lock(io_mtx);
-    float frac = total > 0 ? (float)done.load() / (float)total : 1.0f;
-    int filled = (int)(frac * bar_width);
-    std::cout << "\r[";
-    for (int k = 0; k < bar_width; ++k) std::cout << (k < filled ? '#' : '-');
-    std::cout << "] " << std::fixed << std::setprecision(2) << (frac * 100.0f) << "%" << std::flush;
-  };
-
-  print_bar();
 
   ThreadPool pool(NUM_OF_THREADS);
 
@@ -241,7 +253,6 @@ void HorizonPairDBGenerator::flag_mdds_for_conflicts() {
     flagged.erase(std::unique(flagged.begin(), flagged.end()), flagged.end());
 
     ++done;
-    print_bar();
   };
 
   std::vector<std::future<void>> futures;
@@ -249,38 +260,24 @@ void HorizonPairDBGenerator::flag_mdds_for_conflicts() {
   for (uint32_t mdd_id = 0; mdd_id < mdd_count; mdd_id++)
     futures.push_back(pool.submit([&task, mdd_id]() { task(mdd_id); }));
 
-  for (auto& fut : futures) fut.get();
-
-  print_bar(); // Final 100% update
+  wait_with_progress(futures, done, total);
   std::cout << std::endl;
 }
 
 
 void HorizonPairDBGenerator::generate_sync_time_conflicts() {
   std::cout << "Generating sync-time penalties" << std::endl;
-  conflicts.resize(mdd_count);
+  penalties.resize(mdd_count);
   std::atomic<uint32_t> num_of_conflicts1 = 0;
   std::atomic<uint32_t> num_of_conflicts2 = 0;
 
-  std::mutex io_mtx; // Protects console progress bar output
   const uint32_t total = mdd_count;
   std::atomic<uint32_t> done = 0;
-  const int bar_width = 40;
 
-  auto print_bar = [&]() {
-    std::lock_guard lock(io_mtx);
-    float frac = total > 0 ? (float)done.load() / (float)total : 1.0f;
-    int filled = (int)(frac * bar_width);
-    std::cout << "\r[";
-    for (int k = 0; k < bar_width; ++k) std::cout << (k < filled ? '#' : '-');
-    std::cout << "] " << std::fixed << std::setprecision(2) << (frac * 100.0f) << "%" << std::flush;
-  };
-
-  print_bar();
 
   ThreadPool pool(NUM_OF_THREADS);
 
-  // Task processes a SINGLE mdd_id. conflicts[mdd_id] is only ever written by
+  // Task processes a SINGLE mdd_id. penalties[mdd_id] is only ever written by
   // this task, so no lock is needed for it.
   auto task = [&](uint32_t mdd_id) {
     MDD& mdd = mdd_by_id[mdd_id];
@@ -290,7 +287,7 @@ void HorizonPairDBGenerator::generate_sync_time_conflicts() {
       uint8_t penalty = calculate_sync_time_penalty(mdd, other_mdd);
 
       if (penalty > 0) {
-        conflicts[mdd_id][other_mdd_id] = penalty;
+        penalties[mdd_id].push_back({other_mdd_id, penalty});
         if (penalty == 1)
           num_of_conflicts1++;
         else
@@ -298,9 +295,7 @@ void HorizonPairDBGenerator::generate_sync_time_conflicts() {
       }
     }
 
-    uint32_t current_done = ++done;
-    if (current_done % 100 == 0)
-      print_bar();
+    ++done;
   };
 
   std::vector<std::future<void>> futures;
@@ -308,9 +303,7 @@ void HorizonPairDBGenerator::generate_sync_time_conflicts() {
   for (uint32_t mdd_id = 0; mdd_id < mdd_count; mdd_id++)
     futures.push_back(pool.submit([&task, mdd_id]() { task(mdd_id); }));
 
-  for (auto& fut : futures) fut.get();
-
-  print_bar(); // Final 100% update
+  wait_with_progress(futures, done, total);
   std::cout << "\nNum of conflicts with penalty 1: " << num_of_conflicts1.load() << std::endl;
   std::cout << "Num of conflicts with penalty 2: " << num_of_conflicts2.load() << std::endl;
 }
@@ -343,21 +336,10 @@ MDD create_constrained_move_MDD(MDD& mdd1, Vertex* next_v1) {
 
 
 void HorizonPairDBGenerator::generate_constrained_move_conflicts() {
-  constrained_move_conflicts.resize(mdd_count * NUM_OF_MOVES);
+  constrained_move_penalties.resize(mdd_count * NUM_OF_MOVES);
 
-  std::mutex io_mtx; // Protects console progress bar output
   const uint32_t total = mdd_count;
   std::atomic<uint32_t> done = 0;
-  const int bar_width = 40;
-
-  auto print_bar = [&]() {
-    std::lock_guard lock(io_mtx);
-    float frac = total > 0 ? (float)done.load() / (float)total : 1.0f;
-    int filled = (int)(frac * bar_width);
-    std::cout << "\r[";
-    for (int k = 0; k < bar_width; ++k) std::cout << (k < filled ? '#' : '-');
-    std::cout << "] " << std::fixed << std::setprecision(2) << (frac * 100.0f) << "%" << std::flush;
-  };
 
   std::cout << "Calculating reverse conflict flags... " << std::endl;
   std::vector<std::vector<uint32_t>> reversed_flagged_for_conflict(mdd_count);
@@ -369,16 +351,14 @@ void HorizonPairDBGenerator::generate_constrained_move_conflicts() {
 
   std::cout << "Generating constrained move conflicts" << std::endl;
 
-  print_bar();
   ThreadPool pool(NUM_OF_THREADS);
 
-  // Task processes a SINGLE mdd_id. conflicts[mdd_id] is only ever written by
-  // this task, so no lock is needed for it.
+  // Task processes a SINGLE mdd_id. constrained_move_penalties for this mdd_id
+  // are only ever written by this task, so no lock is needed.
   auto task = [&](uint32_t mdd_id) {
     MDD& mdd = mdd_by_id[mdd_id];
     if (mdd.frontiers[1].size() == 1 && mdd.frontiers[1][0] == mdd.frontiers[0][0]) {
       ++done;
-      print_bar();
       return;
     }
     for (Vertex* v_next : mdd.frontiers[1]) {
@@ -388,19 +368,18 @@ void HorizonPairDBGenerator::generate_constrained_move_conflicts() {
         MDD& other_mdd = mdd_by_id[other_mdd_id];
         uint8_t penalty = calculate_constrained_move_penalty(constrained_mdd, other_mdd);
         if (penalty > 0) {
-          constrained_move_conflicts[mdd_id * NUM_OF_MOVES + move][other_mdd_id] = penalty;
+          constrained_move_penalties[mdd_id * NUM_OF_MOVES + move].push_back({other_mdd_id, penalty});
         }
       }
       for (uint32_t other_mdd_id : reversed_flagged_for_conflict[mdd_id]) {
         MDD& other_mdd = mdd_by_id[other_mdd_id];
         uint8_t penalty = calculate_constrained_move_penalty(constrained_mdd, other_mdd);
         if (penalty > 0) {
-          constrained_move_conflicts[mdd_id * NUM_OF_MOVES + move][other_mdd_id] = penalty;
+          constrained_move_penalties[mdd_id * NUM_OF_MOVES + move].push_back({other_mdd_id, penalty});
         }
       }
     }
     ++done;
-    print_bar();
   };
 
   std::vector<std::future<void>> futures;
@@ -408,9 +387,7 @@ void HorizonPairDBGenerator::generate_constrained_move_conflicts() {
   for (uint32_t mdd_id = 0; mdd_id < mdd_count; mdd_id++)
     futures.push_back(pool.submit([&task, mdd_id]() { task(mdd_id); }));
 
-  for (auto& fut : futures) fut.get();
-
-  print_bar(); // Final 100% update
+  wait_with_progress(futures, done, total);
   std::cout << std::endl;
 }
 
@@ -472,9 +449,10 @@ uint8_t HorizonPairDBGenerator::get_penalty(Vertex* v1, Vertex* g1, Vertex* v2, 
   uint32_t mdd_id2 = mdd_id_by_v_g[agent2];
   uint32_t min_mdd_id = mdd_id1 < mdd_id2 ? mdd_id1 : mdd_id2;
   uint32_t max_mdd_id = mdd_id1 > mdd_id2 ? mdd_id1 : mdd_id2;
-  auto& map = conflicts[min_mdd_id];
-  auto entry = map.find(max_mdd_id);
-  return entry == map.end() ? 0 : entry->second;
+  for (const MDD_Penalty& entry : penalties[min_mdd_id]) {
+    if (entry.mdd_id == max_mdd_id) return entry.penalty;
+  }
+  return 0;
 };
 
 
@@ -483,9 +461,11 @@ uint8_t HorizonPairDBGenerator::get_constrained_move_penalty(Vertex* v1, Vertex*
   uint32_t agent2 = v2->id * V_SIZE + g2->id;
   uint32_t mdd_id1 = mdd_id_by_v_g[agent1];
   uint32_t mdd_id2 = mdd_id_by_v_g[agent2];
-  auto& map = constrained_move_conflicts[mdd_id1 * NUM_OF_MOVES + get_move(v1, v1_next)];
-  auto entry = map.find(mdd_id2);
-  return entry == map.end() ? 0 : entry->second;
+  const auto& entries = constrained_move_penalties[mdd_id1 * NUM_OF_MOVES + get_move(v1, v1_next)];
+  for (const MDD_Penalty& entry : entries) {
+    if (entry.mdd_id == mdd_id2) return entry.penalty;
+  }
+  return 0;
 };
 
 
@@ -789,15 +769,15 @@ void HorizonPairDBGenerator::write_mdd_id_by_v_g_section(std::ofstream& out) {
 
 void HorizonPairDBGenerator::write_conflicts_section(std::ofstream& out) {
   std::cout << "Saving conflicts..." << std::endl;
-  const uint32_t num_conflicts = static_cast<uint32_t>(conflicts.size());
+  const uint32_t num_conflicts = static_cast<uint32_t>(penalties.size());
   out.write(reinterpret_cast<const char*>(&num_conflicts), sizeof(num_conflicts));
   for (uint32_t id = 0; id < num_conflicts; id++) {
-    const auto& map = conflicts[id];
-    uint32_t num_entries = static_cast<uint32_t>(map.size());
+    const auto& entries = penalties[id];
+    uint32_t num_entries = static_cast<uint32_t>(entries.size());
     out.write(reinterpret_cast<const char*>(&num_entries), sizeof(num_entries));
-    for (const auto& [key, value] : map) {
-      out.write(reinterpret_cast<const char*>(&key), sizeof(key));
-      out.write(reinterpret_cast<const char*>(&value), sizeof(value));
+    for (const MDD_Penalty& entry : entries) {
+      out.write(reinterpret_cast<const char*>(&entry.mdd_id), sizeof(entry.mdd_id));
+      out.write(reinterpret_cast<const char*>(&entry.penalty), sizeof(entry.penalty));
     }
     if (id % 256 == 0 || id + 1 == num_conflicts) print_horizon_pair_db_progress_bar(id + 1, num_conflicts);
   }
@@ -806,15 +786,15 @@ void HorizonPairDBGenerator::write_conflicts_section(std::ofstream& out) {
 
 void HorizonPairDBGenerator::write_constrained_move_conflicts_section(std::ofstream& out) {
   std::cout << "Saving constrained move conflicts..." << std::endl;
-  const uint32_t num_entries_outer = static_cast<uint32_t>(constrained_move_conflicts.size());
+  const uint32_t num_entries_outer = static_cast<uint32_t>(constrained_move_penalties.size());
   out.write(reinterpret_cast<const char*>(&num_entries_outer), sizeof(num_entries_outer));
   for (uint32_t id = 0; id < num_entries_outer; id++) {
-    const auto& map = constrained_move_conflicts[id];
-    uint32_t num_entries = static_cast<uint32_t>(map.size());
+    const auto& entries = constrained_move_penalties[id];
+    uint32_t num_entries = static_cast<uint32_t>(entries.size());
     out.write(reinterpret_cast<const char*>(&num_entries), sizeof(num_entries));
-    for (const auto& [key, value] : map) {
-      out.write(reinterpret_cast<const char*>(&key), sizeof(key));
-      out.write(reinterpret_cast<const char*>(&value), sizeof(value));
+    for (const MDD_Penalty& entry : entries) {
+      out.write(reinterpret_cast<const char*>(&entry.mdd_id), sizeof(entry.mdd_id));
+      out.write(reinterpret_cast<const char*>(&entry.penalty), sizeof(entry.penalty));
     }
     if (id % 256 == 0 || id + 1 == num_entries_outer) print_horizon_pair_db_progress_bar(id + 1, num_entries_outer);
   }

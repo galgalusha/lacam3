@@ -32,19 +32,6 @@ static void print_conflict_entry_stats(std::vector<uint32_t> entries_per_map) {
             << ", p95=" << percentile(0.95) << std::endl;
 }
 
-// Prints all entries of conflicts[mdd_id], one per line, sorted lexicographically
-// by (other_mdd_id, value).
-static void print_conflict_entries(uint32_t mdd_id, const absl::flat_hash_map<uint32_t, uint8_t>& map) {
-  std::vector<std::pair<uint32_t, uint8_t>> entries(map.begin(), map.end());
-  std::sort(entries.begin(), entries.end());
-
-  std::cout << "Conflicts for mdd_id=" << mdd_id << " (n=" << entries.size() << "):" << std::endl;
-  std::cout << "other_mdd_id\tvalue" << std::endl;
-  for (const auto& [other_mdd_id, value] : entries)
-    std::cout << other_mdd_id << '\t' << (int)value << std::endl;
-}
-
-
 HorizonPairDB::HorizonPairDB(Graph* _G, std::string _name) : G(_G), V_SIZE(_G->V.size()), name(_name) {}
 
 
@@ -125,7 +112,6 @@ bool HorizonPairDB::read_conflicts_section(std::ifstream& in) {
     return false;
   }
 
-  conflicts.assign(num_conflicts, {});
   penalties.assign(num_conflicts, {});
   std::vector<uint32_t> entries_per_map;
   entries_per_map.reserve(num_conflicts);
@@ -133,16 +119,12 @@ bool HorizonPairDB::read_conflicts_section(std::ifstream& in) {
     uint32_t num_entries;
     in.read(reinterpret_cast<char*>(&num_entries), sizeof(num_entries));
     if (!in) return false;
-    auto& map = conflicts[id];
-    map.reserve(num_entries);
     for (uint32_t e = 0; e < num_entries; e++) {
       uint32_t key;
       uint8_t value;
       in.read(reinterpret_cast<char*>(&key), sizeof(key));
       in.read(reinterpret_cast<char*>(&value), sizeof(value));
       if (!in) return false;
-      map.emplace(key, value);
-      // id < key always, since we only store conflicts[id1][id2] for id1 < id2.
       penalties[id].push_back({key, value});
       penalties[key].push_back({id, value});
     }
@@ -152,9 +134,6 @@ bool HorizonPairDB::read_conflicts_section(std::ifstream& in) {
   std::cout << std::endl;
   print_conflict_entry_stats(entries_per_map);
 
-  // const uint32_t debug_mdd_id = 15151;
-  // if (debug_mdd_id < conflicts.size())
-  //   print_conflict_entries(debug_mdd_id, conflicts[debug_mdd_id]);
   return true;
 }
 

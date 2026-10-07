@@ -2,7 +2,6 @@
 
 #include "mdd.hpp"
 #include "horizon_pair_db_file.hpp"
-#include <absl/container/flat_hash_map.h>
 #include <fstream>
 
 
@@ -31,13 +30,6 @@ struct HorizonPairDB {
 
   //Index is v->id * V_SIZE + g->id;
   std::vector<uint32_t> mdd_id_by_v_g;
-
-  // This maps an MDD id to its conflicting MDDs so that conflicts[id1][id2]
-  // only contains an entry if there is a conclict with a penalty > 0. The
-  // value of the entry is the penalty.
-  // It is assumed that id1 < id2 so we don't need to store conflicts[50][10] which
-  // should have the same value as conflicts[10][50]
-  std::vector<absl::flat_hash_map<uint32_t, uint8_t>> conflicts;
 
   // Similar to confclits, but per MDD, its a vector of entries rather than a map.
   // Also, it should be symmetrical so if mdd1 contains mdd2, mdd2 shall contain mdd1.
@@ -69,11 +61,10 @@ struct HorizonPairDB {
   void compare_to_other_db(HorizonPairDB& other_db);
 
   inline uint8_t get_penalty(uint32_t mdd_id1, uint32_t mdd_id2) {
-    uint32_t min_mdd_id = mdd_id1 < mdd_id2 ? mdd_id1 : mdd_id2;
-    uint32_t max_mdd_id = mdd_id1 > mdd_id2 ? mdd_id1 : mdd_id2;
-    auto& map = conflicts[min_mdd_id];
-    auto entry = map.find(max_mdd_id);
-    return entry == map.end() ? 0 : entry->second;
+    for (auto& entry : penalties[mdd_id1]) {
+      if (entry.mdd_id == mdd_id2) return entry.penalty;
+    }
+    return 0;
   }
 
   inline uint8_t get_penalty(int v1, int g1, int v2, int g2) {
