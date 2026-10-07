@@ -157,7 +157,10 @@ uint8_t PIBT::get_mdd_panelaty_for_push(int i, Vertex* u_i, uint32_t mdd_i_id, i
     if (u_j->id == Q_from[i]->id) continue; // swap conflict with i.
     if (occupied_next[u_j->id] != NO_AGENT) continue; // vertex conflict
     uint32_t mdd_u_j = get_mdd_id(u_j->id, goals[j]->id);
-    uint8_t u_j_penalty = pair_db->get_penalty(mdd_i_id, mdd_u_j);
+    uint8_t u_j_penalty = 0;
+    for (auto& entry : pair_db->penalties[mdd_i_id]) {
+      if (entry.mdd_id == mdd_u_j) { u_j_penalty = entry.penalty; break; }
+    }
     if (u_j_penalty == 0) return 0;
     if (u_j_penalty < penalty) penalty = u_j_penalty;
   }
