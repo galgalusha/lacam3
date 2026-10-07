@@ -47,7 +47,7 @@ void HorizonPairDBGenerator::generate_mdds() {
   // Pre-allocate master storage
   mdd_id_by_v_g.assign(V_SIZE * V_SIZE, 0);
   mdd_by_id.resize(V_SIZE * V_SIZE);
-  mdd_by_t_s.assign(V_SIZE * MDD_SIZE, std::vector<uint32_t>());
+  mdd_by_t_s.assign(V_SIZE * (MDD_SIZE + 1), std::vector<uint32_t>());
 
   std::mutex mdd_count_mtx; // Only used to safely increment the global ID
   std::mutex mdd_mtx2;      // Protects push_back on mdd_by_t_s
@@ -286,6 +286,7 @@ void HorizonPairDBGenerator::generate_sync_time_conflicts() {
     MDD& mdd = mdd_by_id[mdd_id];
     for (uint32_t other_mdd_id : flagged_for_conflict[mdd_id]) {
       MDD& other_mdd = mdd_by_id[other_mdd_id];
+      if (other_mdd.frontiers[0][0] == mdd.frontiers[0][0]) continue;
       uint8_t penalty = calculate_sync_time_penalty(mdd, other_mdd);
 
       if (penalty > 0) {

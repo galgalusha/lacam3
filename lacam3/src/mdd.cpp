@@ -6,14 +6,14 @@
 #include <unordered_map>
 
 
-void MDD::populate(DistTable* D, Vertex* v_i, Vertex* v_g, int horizon) {
-  frontiers.resize(horizon + 1);
+void MDD::populate(DistTable* D, Vertex* v_i, Vertex* v_g, int size) {
+  frontiers.resize(size);
 
   frontiers[0].push_back(v_i);
   int D_t_minus_1 = D->get(v_i->id, v_g->id);
 
   int t;
-  for (t = 1; t <= horizon; t++) { 
+  for (t = 1; t < size; t++) { 
     bool was_goal_inserted_for_this_depth = false;
     for (Vertex* v_t_minus_1 : frontiers[t - 1]) {
       for (Vertex* v_t : v_t_minus_1->neighbor) {
@@ -31,7 +31,7 @@ void MDD::populate(DistTable* D, Vertex* v_i, Vertex* v_g, int horizon) {
     if (D_t_minus_1 < 0) { break; }
   }
   // goal reached before horizon: pad remaining depths with the goal vertex
-  for (int t_pad = t; t_pad <= horizon; t_pad++) frontiers[t_pad].push_back(v_g);
+  for (int t_pad = t; t_pad < size; t_pad++) frontiers[t_pad].push_back(v_g);
 }
 
 
