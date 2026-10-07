@@ -35,8 +35,10 @@ struct HorizonPairDB {
   // Also, it should be symmetrical so if mdd1 contains mdd2, mdd2 shall contain mdd1.
   std::vector<std::vector<MDD_Penalty>> penalties;
 
-  // 
-  std::vector<std::vector<MDD_Penalty>> constrained_move_penalties;
+  // Same as penalties, only that the agent of MDD1 already made its move
+  // from anywhere (we don't know where from) to MDD1.frontiers[0][0] and
+  // MDD2 did not yet made a move.  
+  std::vector<std::vector<MDD_Penalty>> time_shifted_penalties;
 
   // Populates mdd_by_id, mdd_id_by_v_g and conflicts from the file written by
   // HorizonPairDBGenerator::save_to_file(), running sanity checks along the

@@ -1,5 +1,4 @@
 #include "../include/horizon_pair_db.hpp"
-#include "../include/moves.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -141,18 +140,18 @@ bool HorizonPairDB::read_move_constrained_conflicts_section(std::ifstream& in) {
   std::cout << "Loading constrained move conflicts..." << std::endl;
   uint32_t num_entries_outer;
   in.read(reinterpret_cast<char*>(&num_entries_outer), sizeof(num_entries_outer));
-  if (!in || num_entries_outer != mdd_count * NUM_OF_MOVES) {
+  if (!in || num_entries_outer != mdd_count) {
     std::cerr << "HorizonPairDB::read_move_constrained_conflicts_section: count mismatch, expected "
-              << mdd_count * NUM_OF_MOVES << " got " << num_entries_outer << std::endl;
+              << mdd_count << " got " << num_entries_outer << std::endl;
     return false;
   }
 
-  constrained_move_penalties.assign(num_entries_outer, {});
+  time_shifted_penalties.assign(num_entries_outer, {});
   for (uint32_t id = 0; id < num_entries_outer; id++) {
     uint32_t num_entries;
     in.read(reinterpret_cast<char*>(&num_entries), sizeof(num_entries));
     if (!in) return false;
-    auto& entries = constrained_move_penalties[id];
+    auto& entries = time_shifted_penalties[id];
     entries.reserve(num_entries);
     for (uint32_t e = 0; e < num_entries; e++) {
       uint32_t key;

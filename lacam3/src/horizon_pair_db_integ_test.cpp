@@ -1,6 +1,5 @@
 #include "../include/horizon_pair_db.hpp"
 #include "../include/horizon_pair_db_generator.hpp"
-#include "../include/moves.hpp"
 
 #include <unordered_set>
 
@@ -23,7 +22,9 @@ static DistTable* create_dist_table(Graph* G) {
 
 static HorizonPairDB save_and_load_db(Graph* G, int horizon) {
   int orig_horizon = HorizonPairDBGenerator::HORIZON;
+  int orig_mdd_size = HorizonPairDBGenerator::MDD_SIZE;
   HorizonPairDBGenerator::HORIZON = horizon;
+  HorizonPairDBGenerator::MDD_SIZE = horizon + 2;
   HorizonPairDBGenerator DB(G, "test");
   DB.generate_mdds();
   DB.flag_mdds_for_conflicts();
@@ -31,6 +32,7 @@ static HorizonPairDB save_and_load_db(Graph* G, int horizon) {
   DB.generate_constrained_move_conflicts();
   DB.save_to_file();
   HorizonPairDBGenerator::HORIZON = orig_horizon;
+  HorizonPairDBGenerator::MDD_SIZE = orig_mdd_size;
   
   HorizonPairDB loaded_db(G, "test");
   loaded_db.load_from_file();
@@ -144,29 +146,34 @@ static uint8_t get_db_penalty(HorizonPairDB* DB, Vertex* i_start, Vertex* i_goal
 }
 
 
-static uint8_t get_db_constrained_move_penalty(HorizonPairDB* DB, Vertex* i_start, Vertex* i_next, Vertex* i_goal, Vertex* j_start, Vertex* j_goal) {
-  uint32_t mdd_i = DB->mdd_id_by_v_g[i_start->id * DB->G->V.size() + i_goal->id];
-  uint32_t mdd_j = DB->mdd_id_by_v_g[j_start->id * DB->G->V.size() + j_goal->id];
-  uint8_t penalty = 0;
-  for (auto& entry : DB->constrained_move_penalties[mdd_i * NUM_OF_MOVES + get_move(i_start, i_next)]) {
-    if (entry.mdd_id == mdd_j) {
-      penalty = entry.penalty;
-      break;
+static uint8_t get_db_constrained_move_penalty(HorizonPairDB* DB, Vertex* v1, Vertex* v1_next, Vertex* g1, Vertex* v2, Vertex* g2) {
+  uint32_t agent2 = v2->id * DB->G->V.size() + g2->id;
+  uint32_t mdd_id2 = DB->mdd_id_by_v_g[agent2];
+
+  // Scenario 3: agent 1 pushes agent 2
+  if (v2->id == v1_next->id) {
+    MDD& mdd2_next = DB->mdd_by_id[mdd_id2];
+    uint8_t penalty = 2;
+    for (Vertex* v2_next : mdd2_next.frontiers[1]) {
+      if (v2_next->id == v1->id) continue;
+      int8_t p = get_db_penalty(DB, v1_next, g1, v2_next, g2);
+      if (p == 0) return 0;
+      if (p < penalty) penalty = p;
+    }
+    return penalty; 
+  }
+
+  // Scenario 2: agent 1 is at v1_next at time t+1, agent 2 is at v2 at time t.
+  uint32_t agent1 = v1_next->id * DB->G->V.size() + g1->id;
+  uint32_t mdd1 = DB->mdd_id_by_v_g[agent1];
+  const auto& entries = DB->time_shifted_penalties[mdd1];
+  for (const auto& entry : entries) {
+    if (entry.mdd_id == mdd_id2) {
+      return entry.penalty;
     }
   }
-  return penalty;
-}
-
-
-static bool has_duplicate(HorizonPairDB* DB, Vertex* i_start, Vertex* i_next, Vertex* i_goal) {
-  uint32_t mdd_i = DB->mdd_id_by_v_g[i_start->id * DB->G->V.size() + i_goal->id];
-  auto& entries = DB->constrained_move_penalties[mdd_i * NUM_OF_MOVES + get_move(i_start, i_next)];
-  std::unordered_set<uint32_t> seen;
-  for (auto& entry : entries) {
-    if (!seen.insert(entry.mdd_id).second) return true;
-  }
-  return false;
-}
+  return 0;
+};
 
 
 static bool test_sync_time_conflicts(Graph* G, DistTable* D, HorizonPairDB* DB, Vertex* i_start, Vertex* i_goal, Vertex* j_start, Vertex* j_goal) {
@@ -209,6 +216,8 @@ static bool test_constrained_move_conflicts(Graph* G, DistTable* D, HorizonPairD
 
 
 void HorizonPairDB::integration_test1() {
+  int HORIZON = 10;
+  int MDD_SIZE = 12;
   std::cout << "Running integration_test1" << std::endl;
   std::vector<std::string> grid = {
     "...@.",
@@ -217,7 +226,7 @@ void HorizonPairDB::integration_test1() {
     "..@..",
   };
   Graph* G = new Graph(grid);
-  HorizonPairDB DB = save_and_load_db(G, 10);
+  HorizonPairDB DB = save_and_load_db(G, HORIZON);
   DistTable* D = create_dist_table(G);
 
 
@@ -256,7 +265,6 @@ void HorizonPairDB::integration_test1() {
             if (i_next == i_start) continue;
             bool success = test_constrained_move_conflicts(G, D, &DB, i_start, i_next, i_goal, j_start, j_goal);
             if (success) successes++; else failures++;
-            if (has_duplicate(&DB, i_start, i_next, i_goal)) duplicates++;
           }
         }
       }
