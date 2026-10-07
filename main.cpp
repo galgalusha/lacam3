@@ -172,15 +172,15 @@ int main(int argc, char *argv[])
     exit(0);
   }
 
-//   MDD::test_joint_mdd();
-//   MDD::test_joint_mdd2();
-//   MDD::test_joint_mdd_with_wait();
-//   MDD::test_joint_mdd_with_wait2();
-//   HorizonPairDBGenerator::test_db_1();
-//   HorizonPairDBGenerator::test_db_time_shift();
-//   HorizonPairDBGenerator::test_db_time_shift_2();
-//   HorizonPairDB::integration_test1();
-//   exit(0);
+  MDD::test_joint_mdd();
+  MDD::test_joint_mdd2();
+  MDD::test_joint_mdd_with_wait();
+  MDD::test_joint_mdd_with_wait2();
+  HorizonPairDBGenerator::test_db_1();
+  HorizonPairDBGenerator::test_db_time_shift();
+  HorizonPairDBGenerator::test_db_time_shift_2();
+//  HorizonPairDB::integration_test1();
+  exit(0);
   
 
   if (use_pair_db) {

@@ -36,8 +36,10 @@ struct HorizonPairDBGenerator {
   // Stores only positive-penalty pairs with mdd_id < entry.mdd_id.
   std::vector<std::vector<MDD_Penalty>> penalties;
 
-  // The index here is NUM_OF_MOVES * mdd_id + move (see moves.hpp).
-  std::vector<std::vector<MDD_Penalty>> constrained_move_penalties;
+  // Same as penalties, only that the agent of MDD1 already made its move
+  // from anywhere (we don't know where from) to MDD1.frontiers[0][0] and
+  // MDD2 did not yet made a move.  
+  std::vector<std::vector<MDD_Penalty>> time_shifted_penalties;
 
   // flagged_for_conflict[mdd_id] holds the ids (> mdd_id) of other MDDs whose
   // frontiers overlap in space-time with mdd_id's, as discovered by
@@ -61,7 +63,7 @@ struct HorizonPairDBGenerator {
   void generate_constrained_move_conflicts();
 
   uint8_t calculate_sync_time_penalty(MDD& mdd1, MDD& mdd2);
-  uint8_t calculate_constrained_move_penalty(MDD& constrained_mdd, MDD& other_mdd);
+  uint8_t calculate_time_shifted_penalty(MDD& constrained_mdd, MDD& other_mdd);
 
   // Prompts the user for (v_i, g_i), renders the resulting MDD, and repeats
   // indefinitely until the process is killed.

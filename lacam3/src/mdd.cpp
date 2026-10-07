@@ -3,6 +3,7 @@
 
 #include "absl/container/inlined_vector.h"
 #include <sstream>
+#include <string>
 #include <unordered_map>
 
 
@@ -109,10 +110,12 @@ MDD MDD::get_mdd_with_wait_at_time_1() {
 
 bool MDD::check_joint_mdd_conflict(MDD& other_mdd, Graph* G, int horizon, int dt_me, int dt_other) {
     if (horizon + dt_me > frontiers.size()) {
-      throw std::runtime_error("this->frontiers is too small for joint comparison");
+      throw std::runtime_error("this->frontiers is too small for joint comparison. frontiers.size: " +
+                               std::to_string(frontiers.size()));
     }
     if (horizon + dt_other > other_mdd.frontiers.size()) {
-      throw std::runtime_error("other->frontiers is too small for joint comparison");
+      throw std::runtime_error("other->frontiers is too small for joint comparison. frontiers.size: " +
+                               std::to_string(other_mdd.frontiers.size()));
     }
 
     std::vector<Vertex*> u1_self_vector({ nullptr });
@@ -204,6 +207,8 @@ static DistTable* create_dist_table(Graph* G) {
 
 
 void MDD::test_joint_mdd() {
+  int HORIZON = 6;
+  int MDD_SIZE = 8;
   std::cout << "Running test_joint_mdd" << std::endl;
   std::vector<std::string> grid = {
     "....",
@@ -228,10 +233,10 @@ void MDD::test_joint_mdd() {
   MDD mdd_A;
   MDD mdd_B;
 
-  mdd_A.populate(D, A_start, A_goal, 5);
-  mdd_B.populate(D, B_start, B_goal, 5);
+  mdd_A.populate(D, A_start, A_goal, MDD_SIZE);
+  mdd_B.populate(D, B_start, B_goal, MDD_SIZE);
 
-  bool actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B, G, 10);
+  bool actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B, G, HORIZON);
   bool expected_conflict = true;
 
   if (actual_conflict != expected_conflict) {
@@ -243,9 +248,9 @@ void MDD::test_joint_mdd() {
   auto C_goal  = coord(3, 2);
 
   MDD mdd_C;
-  mdd_C.populate(D, C_start, C_goal, 5);
+  mdd_C.populate(D, C_start, C_goal, MDD_SIZE);
 
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_C, G, 10);
+  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_C, G, HORIZON);
   expected_conflict = false;
 
   if (actual_conflict != expected_conflict) {
@@ -261,6 +266,8 @@ void MDD::test_joint_mdd() {
 
 
 void MDD::test_joint_mdd2() {
+  int HORIZON = 6;
+  int MDD_SIZE = 8;
   std::cout << "Running test_joint_mdd2" << std::endl;
   std::vector<std::string> grid = {
     ".@.",
@@ -296,13 +303,13 @@ void MDD::test_joint_mdd2() {
   MDD mdd_D;
   MDD mdd_E;
 
-  mdd_A.populate(D, A_start, A_goal, 5);
-  mdd_B.populate(D, B_start, B_goal, 5);
-  mdd_C.populate(D, C_start, C_goal, 5);
-  mdd_D.populate(D, D_start, D_goal, 5);
-  mdd_E.populate(D, E_start, E_goal, 5);
+  mdd_A.populate(D, A_start, A_goal, MDD_SIZE);
+  mdd_B.populate(D, B_start, B_goal, MDD_SIZE);
+  mdd_C.populate(D, C_start, C_goal, MDD_SIZE);
+  mdd_D.populate(D, D_start, D_goal, MDD_SIZE);
+  mdd_E.populate(D, E_start, E_goal, MDD_SIZE);
 
-  bool actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B, G, 10);
+  bool actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B, G, HORIZON);
   bool expected_conflict = false;
 
   if (actual_conflict != expected_conflict) {
@@ -310,7 +317,7 @@ void MDD::test_joint_mdd2() {
     exit(0);
   }
 
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_C, G, 10);
+  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_C, G, HORIZON);
   expected_conflict = true;
 
   if (actual_conflict != expected_conflict) {
@@ -318,7 +325,7 @@ void MDD::test_joint_mdd2() {
     exit(0);
   }
 
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_D, G, 10);
+  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_D, G, HORIZON);
   expected_conflict = true;
 
   if (actual_conflict != expected_conflict) {
@@ -326,7 +333,7 @@ void MDD::test_joint_mdd2() {
     exit(0);
   }
 
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_E, G, 10);
+  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_E, G, HORIZON);
   expected_conflict = true;
 
   if (actual_conflict != expected_conflict) {
@@ -341,6 +348,8 @@ void MDD::test_joint_mdd2() {
 }
 
 void MDD::test_joint_mdd_with_wait() {
+  int HORIZON = 6;
+  int MDD_SIZE = 8;
   std::cout << "Running test_joint_mdd_with_wait" << std::endl;
   std::vector<std::string> grid = {
     "....",
@@ -365,28 +374,27 @@ void MDD::test_joint_mdd_with_wait() {
   MDD mdd_A;
   MDD mdd_B;
 
-  mdd_A.populate(D, A_start, A_goal, 5);
-  mdd_B.populate(D, B_start, B_goal, 5); mdd_B = mdd_B.get_mdd_with_wait();
+  mdd_A.populate(D, A_start, A_goal, MDD_SIZE);
+  mdd_B.populate(D, B_start, B_goal, MDD_SIZE);
 
-  bool actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B, G, 10);
-  bool expected_conflict = false;
+  bool actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B, G, HORIZON);
+  bool expected_conflict = true;
 
   if (actual_conflict != expected_conflict) {
-    std::cout << "Detected false conflict between A and B" << std::endl;
+    std::cout << "Failed to detect conflict between A and B" << std::endl;
     exit(0);
   }
 
-  auto C_start = coord(0, 2);
-  auto C_goal  = coord(3, 2);
+  auto B_next = coord(1, 1);
 
-  MDD mdd_C;
-  mdd_C.populate(D, C_start, C_goal, 5); mdd_C = mdd_C.get_mdd_with_wait();
+  MDD mdd_B_next;
+  mdd_B_next.populate(D, B_next, B_goal, MDD_SIZE);
 
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_C, G, 10);
+  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B_next, G, HORIZON, 1, 0);
   expected_conflict = true;
 
   if (actual_conflict != expected_conflict) {
-    std::cout << "Failed to detect conflict between A and C" << std::endl;
+    std::cout << "Failed to detect conflict between A and B_next" << std::endl;
     exit(0);
   }
 
@@ -397,6 +405,8 @@ void MDD::test_joint_mdd_with_wait() {
 }
 
 void MDD::test_joint_mdd_with_wait2() {
+  int HORIZON = 6;
+  int MDD_SIZE = 8;
   std::cout << "Running test_joint_mdd_with_wait2" << std::endl;
   std::vector<std::string> grid = {
     ".@.",
@@ -432,13 +442,13 @@ void MDD::test_joint_mdd_with_wait2() {
   MDD mdd_D;
   MDD mdd_E;
 
-  mdd_A.populate(D, A_start, A_goal, 5);
-  mdd_B.populate(D, B_start, B_goal, 5); mdd_B = mdd_B.get_mdd_with_wait();
-  mdd_C.populate(D, C_start, C_goal, 5); mdd_C = mdd_C.get_mdd_with_wait();
-  mdd_D.populate(D, D_start, D_goal, 5); mdd_D = mdd_D.get_mdd_with_wait();
-  mdd_E.populate(D, E_start, E_goal, 5); mdd_E = mdd_E.get_mdd_with_wait();
+  mdd_A.populate(D, A_start, A_goal, MDD_SIZE);
+  mdd_B.populate(D, B_start, B_goal, MDD_SIZE); mdd_B = mdd_B.get_mdd_with_wait();
+  mdd_C.populate(D, C_start, C_goal, MDD_SIZE); mdd_C = mdd_C.get_mdd_with_wait();
+  mdd_D.populate(D, D_start, D_goal, MDD_SIZE); mdd_D = mdd_D.get_mdd_with_wait();
+  mdd_E.populate(D, E_start, E_goal, MDD_SIZE); mdd_E = mdd_E.get_mdd_with_wait();
 
-  bool actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B, G, 10);
+  bool actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B, G, HORIZON);
   bool expected_conflict = true;
 
   if (actual_conflict != expected_conflict) {
@@ -446,7 +456,7 @@ void MDD::test_joint_mdd_with_wait2() {
     exit(0);
   }
 
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_C, G, 10);
+  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_C, G, HORIZON);
   expected_conflict = true;
 
   if (actual_conflict != expected_conflict) {
@@ -454,7 +464,7 @@ void MDD::test_joint_mdd_with_wait2() {
     exit(0);
   }
 
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_D, G, 10);
+  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_D, G, HORIZON);
   expected_conflict = true;
 
   if (actual_conflict != expected_conflict) {
@@ -462,7 +472,7 @@ void MDD::test_joint_mdd_with_wait2() {
     exit(0);
   }
 
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_E, G, 10);
+  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_E, G, HORIZON);
   expected_conflict = true;
 
   if (actual_conflict != expected_conflict) {

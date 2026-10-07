@@ -175,14 +175,14 @@ uint8_t HorizonPairDBGenerator::calculate_sync_time_penalty(MDD& mdd1, MDD& mdd2
 }
 
 
-uint8_t HorizonPairDBGenerator::calculate_constrained_move_penalty(MDD& constrained_mdd, MDD& other_mdd) {
-  if (!constrained_mdd.check_joint_mdd_conflict(other_mdd, G, HORIZON))
+uint8_t HorizonPairDBGenerator::calculate_time_shifted_penalty(MDD& mdd_next, MDD& mdd_now) {
+  const static int DT_NEXT = 0;
+  const static int DT_NOW  = 1;
+  if (!mdd_next.check_joint_mdd_conflict(mdd_now, G, HORIZON, DT_NEXT, DT_NOW))
     return 0;
-  MDD mdd1_with_wait = constrained_mdd.get_mdd_with_wait_at_time_1();
-  if (!mdd1_with_wait.check_joint_mdd_conflict(other_mdd, G, HORIZON))
+  if (!mdd_next.check_joint_mdd_conflict(mdd_now, G, HORIZON, DT_NEXT + 1, DT_NOW))
     return 1;
-  MDD mdd2_with_wait = other_mdd.get_mdd_with_wait();
-  if (!mdd2_with_wait.check_joint_mdd_conflict(constrained_mdd, G, HORIZON))
+  if (!mdd_next.check_joint_mdd_conflict(mdd_now, G, HORIZON, DT_NEXT, DT_NOW - 1))
     return 1;
   return 2;
 }
@@ -243,6 +243,9 @@ void HorizonPairDBGenerator::flag_mdds_for_conflicts() {
             if (visited[other_mdd_id]) continue;
             visited[other_mdd_id] = true;
 
+            MDD& other_mdd = mdd_by_id[other_mdd_id];
+            if (other_mdd.frontiers[0][0]->id == mdd.frontiers[0][0]->id) continue;
+
             flagged.push_back(other_mdd_id);
           }
         }
@@ -283,7 +286,6 @@ void HorizonPairDBGenerator::generate_sync_time_conflicts() {
     MDD& mdd = mdd_by_id[mdd_id];
     for (uint32_t other_mdd_id : flagged_for_conflict[mdd_id]) {
       MDD& other_mdd = mdd_by_id[other_mdd_id];
-      if (other_mdd.frontiers[0][0] == mdd.frontiers[0][0]) continue;
       uint8_t penalty = calculate_sync_time_penalty(mdd, other_mdd);
 
       if (penalty > 0) {
@@ -316,6 +318,7 @@ inline bool check_is_accessible(Vertex* from, Vertex* to) {
   return (dx + dy < 2);
 }
 
+
 MDD create_constrained_move_MDD(MDD& mdd1, Vertex* next_v1) {
   MDD new_mdd;
   new_mdd.frontiers.resize(mdd1.frontiers.size());
@@ -336,7 +339,7 @@ MDD create_constrained_move_MDD(MDD& mdd1, Vertex* next_v1) {
 
 
 void HorizonPairDBGenerator::generate_constrained_move_conflicts() {
-  constrained_move_penalties.resize(mdd_count * NUM_OF_MOVES);
+  time_shifted_penalties.resize(mdd_count);
 
   const uint32_t total = mdd_count;
   std::atomic<uint32_t> done = 0;
@@ -349,34 +352,29 @@ void HorizonPairDBGenerator::generate_constrained_move_conflicts() {
     }
   }
 
-  std::cout << "Generating constrained move conflicts" << std::endl;
+  std::cout << "Generating time shifted conflicts" << std::endl;
 
   ThreadPool pool(NUM_OF_THREADS);
 
-  // Task processes a SINGLE mdd_id. constrained_move_penalties for this mdd_id
-  // are only ever written by this task, so no lock is needed.
   auto task = [&](uint32_t mdd_id) {
     MDD& mdd = mdd_by_id[mdd_id];
+    // A wait move doesn't need a penalty.
     if (mdd.frontiers[1].size() == 1 && mdd.frontiers[1][0] == mdd.frontiers[0][0]) {
       ++done;
       return;
     }
-    for (Vertex* v_next : mdd.frontiers[1]) {
-      MDD constrained_mdd = create_constrained_move_MDD(mdd, v_next);
-      int move = get_move(mdd.frontiers[0][0], v_next);
-      for (uint32_t other_mdd_id : flagged_for_conflict[mdd_id]) {
-        MDD& other_mdd = mdd_by_id[other_mdd_id];
-        uint8_t penalty = calculate_constrained_move_penalty(constrained_mdd, other_mdd);
-        if (penalty > 0) {
-          constrained_move_penalties[mdd_id * NUM_OF_MOVES + move].push_back({other_mdd_id, penalty});
-        }
+    for (uint32_t other_mdd_id : flagged_for_conflict[mdd_id]) {
+      MDD& other_mdd = mdd_by_id[other_mdd_id];
+      uint8_t penalty = calculate_time_shifted_penalty(mdd, other_mdd);
+      if (penalty > 0) {
+        time_shifted_penalties[mdd_id].push_back( { other_mdd_id, penalty });
       }
-      for (uint32_t other_mdd_id : reversed_flagged_for_conflict[mdd_id]) {
-        MDD& other_mdd = mdd_by_id[other_mdd_id];
-        uint8_t penalty = calculate_constrained_move_penalty(constrained_mdd, other_mdd);
-        if (penalty > 0) {
-          constrained_move_penalties[mdd_id * NUM_OF_MOVES + move].push_back({other_mdd_id, penalty});
-        }
+    }
+    for (uint32_t other_mdd_id : reversed_flagged_for_conflict[mdd_id]) {
+      MDD& other_mdd = mdd_by_id[other_mdd_id];
+      uint8_t penalty = calculate_time_shifted_penalty(mdd, other_mdd);
+      if (penalty > 0) {
+        time_shifted_penalties[mdd_id].push_back( { other_mdd_id, penalty });
       }
     }
     ++done;
@@ -457,12 +455,35 @@ uint8_t HorizonPairDBGenerator::get_penalty(Vertex* v1, Vertex* g1, Vertex* v2, 
 
 
 uint8_t HorizonPairDBGenerator::get_constrained_move_penalty(Vertex* v1, Vertex* v1_next, Vertex* g1, Vertex* v2, Vertex* g2) {
-  uint32_t agent1 = v1->id * V_SIZE + g1->id;
   uint32_t agent2 = v2->id * V_SIZE + g2->id;
-  uint32_t mdd_id1 = mdd_id_by_v_g[agent1];
   uint32_t mdd_id2 = mdd_id_by_v_g[agent2];
-  const auto& entries = constrained_move_penalties[mdd_id1 * NUM_OF_MOVES + get_move(v1, v1_next)];
+
+  // Scenario 3: agent 1 pushes agent 2
+  if (v2->id == v1_next->id) {
+    MDD& mdd2_next = mdd_by_id[mdd_id2];
+    uint8_t penalty = 2;
+    for (Vertex* v2_next : mdd2_next.frontiers[1]) {
+      if (v2_next->id == v1->id) continue;
+      // std::cout << "[DEBUG 4]" << std::endl;
+      // std::cout << "v1_next->id: " << v1_next->id << std::endl;
+      // std::cout << "g1->id: " << g1->id << std::endl;
+      // std::cout << "v2_next->id: " << v2_next->id << std::endl;
+      // std::cout << "g2->id: " << g2->id << std::endl;
+      int8_t p = get_penalty(v1_next, g1, v2_next, g2);
+      if (p == 0) return 0;
+      if (p < penalty) penalty = p;
+    }
+    return penalty; 
+  }
+
+  // Scenario 2: agent 1 is at v1_next at time t+1, agent 2 is at v2 at time t.
+  uint32_t agent1 = v1_next->id * V_SIZE + g1->id;
+  uint32_t mdd1 = mdd_id_by_v_g[agent1];
+  const auto& entries = time_shifted_penalties[mdd1];
+  std::cout << "mdd2: " << mdd_id2 << std::endl;
+  std::cout << "shifted penalties of " << mdd1 << std::endl;
   for (const MDD_Penalty& entry : entries) {
+    std::cout << entry.mdd_id << std::endl;
     if (entry.mdd_id == mdd_id2) return entry.penalty;
   }
   return 0;
@@ -549,6 +570,7 @@ void HorizonPairDBGenerator::test_db_time_shift() {
   HorizonPairDBGenerator DB(G, "test");
   DB.generate_mdds();
   DB.flag_mdds_for_conflicts();
+  DB.generate_sync_time_conflicts();
   DB.generate_constrained_move_conflicts();
 
   auto coord = [G](int row, int col) {
@@ -584,7 +606,7 @@ void HorizonPairDBGenerator::test_db_time_shift() {
     int expected_penalty = 2;
     int actual_penalty = DB.get_constrained_move_penalty(B_start, B_next, B_goal, A_start, B_goal);
     if (expected_penalty != actual_penalty) {
-      std::cout << "Scenario 2 failed" << std::endl;
+      std::cout << "Scenario 2 failed. Expected: 2, Actual: " << actual_penalty << std::endl;
       exit(0);
     }
   }
@@ -666,6 +688,7 @@ void HorizonPairDBGenerator::test_db_time_shift_2() {
   HorizonPairDBGenerator DB(G, "test");
   DB.generate_mdds();
   DB.flag_mdds_for_conflicts();
+  DB.generate_sync_time_conflicts();
   DB.generate_constrained_move_conflicts();
 
   auto coord = [G](int row, int col) {
@@ -786,10 +809,10 @@ void HorizonPairDBGenerator::write_conflicts_section(std::ofstream& out) {
 
 void HorizonPairDBGenerator::write_constrained_move_conflicts_section(std::ofstream& out) {
   std::cout << "Saving constrained move conflicts..." << std::endl;
-  const uint32_t num_entries_outer = static_cast<uint32_t>(constrained_move_penalties.size());
+  const uint32_t num_entries_outer = static_cast<uint32_t>(time_shifted_penalties.size());
   out.write(reinterpret_cast<const char*>(&num_entries_outer), sizeof(num_entries_outer));
   for (uint32_t id = 0; id < num_entries_outer; id++) {
-    const auto& entries = constrained_move_penalties[id];
+    const auto& entries = time_shifted_penalties[id];
     uint32_t num_entries = static_cast<uint32_t>(entries.size());
     out.write(reinterpret_cast<const char*>(&num_entries), sizeof(num_entries));
     for (const MDD_Penalty& entry : entries) {
