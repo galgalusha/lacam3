@@ -179,8 +179,8 @@ int main(int argc, char *argv[])
 //   HorizonPairDBGenerator::test_db_1();
 //   HorizonPairDBGenerator::test_db_time_shift();
 //   HorizonPairDBGenerator::test_db_time_shift_2();
-  HorizonPairDB::integration_test1();
-  exit(0);
+//   HorizonPairDB::integration_test1();
+//   exit(0);
   
 
   if (use_pair_db) {

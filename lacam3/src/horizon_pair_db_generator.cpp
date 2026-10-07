@@ -180,9 +180,10 @@ uint8_t HorizonPairDBGenerator::calculate_time_shifted_penalty(MDD& mdd_next, MD
   const static int DT_NOW  = 1;
   if (!mdd_next.check_joint_mdd_conflict(mdd_now, G, HORIZON, DT_NEXT, DT_NOW))
     return 0;
-  if (!mdd_next.check_joint_mdd_conflict(mdd_now, G, HORIZON, DT_NEXT + 1, DT_NOW))
-    return 1;
   if (!mdd_next.check_joint_mdd_conflict(mdd_now, G, HORIZON, DT_NEXT, DT_NOW - 1))
+    return 1;
+  MDD mdd_next_delayed = mdd_next.get_mdd_with_wait();
+  if (!mdd_next_delayed.check_joint_mdd_conflict(mdd_now, G, HORIZON, DT_NEXT, DT_NOW))
     return 1;
   return 2;
 }
@@ -358,11 +359,6 @@ void HorizonPairDBGenerator::generate_constrained_move_conflicts() {
 
   auto task = [&](uint32_t mdd_id) {
     MDD& mdd = mdd_by_id[mdd_id];
-    // A wait move doesn't need a penalty.
-    if (mdd.frontiers[1].size() == 1 && mdd.frontiers[1][0] == mdd.frontiers[0][0]) {
-      ++done;
-      return;
-    }
     for (uint32_t other_mdd_id : flagged_for_conflict[mdd_id]) {
       MDD& other_mdd = mdd_by_id[other_mdd_id];
       uint8_t penalty = calculate_time_shifted_penalty(mdd, other_mdd);
@@ -460,15 +456,14 @@ uint8_t HorizonPairDBGenerator::get_constrained_move_penalty(Vertex* v1, Vertex*
 
   // Scenario 3: agent 1 pushes agent 2
   if (v2->id == v1_next->id) {
-    MDD& mdd2_next = mdd_by_id[mdd_id2];
+    MDD& mdd2_now = mdd_by_id[mdd_id2];
+    if (mdd2_now.frontiers[1].size() == 0 && mdd2_now.frontiers[1][0]->id == v2->id) {
+      // Agent 2 is stanging at its goal
+      return 2;
+    }
     uint8_t penalty = 2;
-    for (Vertex* v2_next : mdd2_next.frontiers[1]) {
+    for (Vertex* v2_next : mdd2_now.frontiers[1]) {
       if (v2_next->id == v1->id) continue;
-      // std::cout << "[DEBUG 4]" << std::endl;
-      // std::cout << "v1_next->id: " << v1_next->id << std::endl;
-      // std::cout << "g1->id: " << g1->id << std::endl;
-      // std::cout << "v2_next->id: " << v2_next->id << std::endl;
-      // std::cout << "g2->id: " << g2->id << std::endl;
       int8_t p = get_penalty(v1_next, g1, v2_next, g2);
       if (p == 0) return 0;
       if (p < penalty) penalty = p;

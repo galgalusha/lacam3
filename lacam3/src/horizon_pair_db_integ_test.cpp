@@ -150,11 +150,16 @@ static uint8_t get_db_constrained_move_penalty(HorizonPairDB* DB, Vertex* v1, Ve
   uint32_t agent2 = v2->id * DB->G->V.size() + g2->id;
   uint32_t mdd_id2 = DB->mdd_id_by_v_g[agent2];
 
+  // bool is_debug = (v1->x==4 && v1->y==3 && g1->x==0 && g1->y==3 && v1_next->x==3 && v1_next->y==3 && v2->x==3 && v2->y==3 && g2->x==3 && g2->y==3);
   // Scenario 3: agent 1 pushes agent 2
   if (v2->id == v1_next->id) {
-    MDD& mdd2_next = DB->mdd_by_id[mdd_id2];
+    MDD& mdd2_now = DB->mdd_by_id[mdd_id2];
+    if (mdd2_now.frontiers[1].size() == 1 && mdd2_now.frontiers[1][0]->id == v2->id) {
+      // Agent 2 is stanging at its goal
+      return 2;
+    }
     uint8_t penalty = 2;
-    for (Vertex* v2_next : mdd2_next.frontiers[1]) {
+    for (Vertex* v2_next : mdd2_now.frontiers[1]) {
       if (v2_next->id == v1->id) continue;
       int8_t p = get_db_penalty(DB, v1_next, g1, v2_next, g2);
       if (p == 0) return 0;
