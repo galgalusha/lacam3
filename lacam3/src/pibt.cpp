@@ -102,41 +102,48 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
 {
   for (int k = start; k < num_neighbors; ++k) {
     Vertex* u_i = neighbors[k];
+    if (u_i == Q_from[i]) continue;
+
     double max_penalty = 0;
     double total_penalty = 0;
 
-    uint32_t mdd_i = get_mdd_id(u_i->id, goals[i]->id);
+    uint32_t mdd_u_i = get_mdd_id(u_i->id, goals[i]->id);
 
-    for (const auto& conflict : pair_db->penalties[mdd_i]) {
+    //
+    // Scenario 1: Agent j already moved  (Q_to[j] != nullptr)
+    //
+    for (const auto& conflict : pair_db->penalties[mdd_u_i]) {
       uint32_t mdd_j = conflict.mdd_id;
       double penalty = conflict.penalty;
-      int j;
-      //
-      // Scenario 1: Agent j already moved
-      //
-      j = mdd_registry.mdd_id_to_agent_next[mdd_j];
+      int j = mdd_registry.mdd_id_to_agent_next[mdd_j];
       if (j != mdd_registry.NO_AGENT && j != i && Q_to[j] != nullptr) {
-        // std::cout << "[2] fill_dh_values - scenario 1 " << std::endl;
         if (penalty > max_penalty) max_penalty = penalty;
         total_penalty += penalty;
       }
-      //
-      // Scenario 2: Agent j did not yet move
-      //
-      j = mdd_registry.mdd_id_to_agent_now[mdd_j];
-      if (j != mdd_registry.NO_AGENT && j != i && Q_to[j] == nullptr) {
+    }
+
+    //
+    // Scenario 2: Agent j did not yet move  (Q_to[j] == nullptr)
+    //
+    for (const auto& conflict : pair_db->time_shifted_penalties[mdd_u_i]) {
+      uint32_t mdd_j = conflict.mdd_id;
+      double penalty = conflict.penalty;
+      int j = mdd_registry.mdd_id_to_agent_now[mdd_j];
+      if (j != mdd_registry.NO_AGENT && j != i && Q_to[j] == nullptr && Q_from[j] != u_i) {
         double speculated_penalty = penalty * DISCOUNT_FACTOR;
         if (speculated_penalty > max_penalty) max_penalty = speculated_penalty;
         total_penalty += speculated_penalty;
       }
     }
+
     //
-    // Scenario 3: Agent j is going to be pushed by agent i so that u_i==u_j
+    // Scenario 3: Agent j is going to be pushed by agent i so that u_i==Q_from[j]
     //             therefore, mdd_j does not exist in conflicts[mdd_i]
     //
     int j = occupied_now[u_i->id];
     if (j != NO_AGENT && j != i && Q_to[j] == nullptr) {
-      double penalty = get_mdd_panelaty_for_push(i, u_i, mdd_i, j, Q_from) * DISCOUNT_FACTOR;
+      // uint32_t mdd_i = get_mdd_id(Q_from[i]->id, goals[i]->id);
+      double penalty = get_mdd_panelaty_for_push(i, u_i, mdd_u_i, j, Q_from) * DISCOUNT_FACTOR;
       if (penalty > max_penalty) max_penalty = penalty;
       total_penalty += penalty;
     } 
