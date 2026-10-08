@@ -74,13 +74,19 @@ int joint_astar(DistTable* D, Vertex* i_start, Vertex* i_next, Vertex* i_goal, V
     auto [g, f, ci, cj] = open.top();
     open.pop();
 
-    if (ci == i_goal && cj == j_goal) return g;
+    bool i_is_forced_to_move = i_next != nullptr && i_next != i_start && g == 0;
+    if (ci == i_goal && cj == j_goal) {
+      if (!i_is_forced_to_move) return g;
+    }
 
     int ek = encode(ci->id, cj->id);
 
     if (t_closed_gen[ek] == t_current_gen && t_closed_g[ek] <= g) continue;
-    t_closed_gen[ek] = t_current_gen;
-    t_closed_g[ek] = g;
+
+    if (!i_is_forced_to_move) {
+      t_closed_gen[ek] = t_current_gen;
+      t_closed_g[ek] = g;
+    }
 
     bool i_at_goal = (ci == i_goal);
     bool j_at_goal = (cj == j_goal);
@@ -150,7 +156,6 @@ static uint8_t get_db_constrained_move_penalty(HorizonPairDB* DB, Vertex* v1, Ve
   uint32_t agent2 = v2->id * DB->G->V.size() + g2->id;
   uint32_t mdd_id2 = DB->mdd_id_by_v_g[agent2];
 
-  // bool is_debug = (v1->x==4 && v1->y==3 && g1->x==0 && g1->y==3 && v1_next->x==3 && v1_next->y==3 && v2->x==3 && v2->y==3 && g2->x==3 && g2->y==3);
   // Scenario 3: agent 1 pushes agent 2
   if (v2->id == v1_next->id) {
     MDD& mdd2_now = DB->mdd_by_id[mdd_id2];
@@ -202,7 +207,11 @@ static bool test_sync_time_conflicts(Graph* G, DistTable* D, HorizonPairDB* DB, 
 
 static bool test_constrained_move_conflicts(Graph* G, DistTable* D, HorizonPairDB* DB, Vertex* i_start, Vertex* i_next, Vertex* i_goal, Vertex* j_start, Vertex* j_goal) {
   int astar_cost = joint_astar(D, i_start, i_next, i_goal, j_start, j_goal);
-  int naive_cost = D->get(i_start->id, i_goal->id) + D->get(j_start->id, j_goal->id);
+  int j_naive_cost = D->get(j_start->id, j_goal->id);
+  int i_naive_cost = i_next == nullptr
+      ? D->get(i_start->id, i_goal->id)
+      : D->get(i_start->id, i_next->id) + D->get(i_next->id, i_goal->id);
+  int naive_cost = i_naive_cost + j_naive_cost;
   int astar_penalty = std::min(2, astar_cost - naive_cost);
   int db_penalty = get_db_constrained_move_penalty(DB, i_start, i_next, i_goal, j_start, j_goal);
   if (astar_penalty != db_penalty) {
@@ -265,8 +274,9 @@ void HorizonPairDB::integration_test1() {
         for (Vertex* j_goal : G->V) {
           if (j_goal == i_goal) continue;
           uint32_t mdd_i_id = DB.mdd_id_by_v_g[i_start->id * DB.V_SIZE + i_goal->id];
-          MDD& mdd_i = DB.mdd_by_id[mdd_i_id];
-          for (Vertex* i_next : mdd_i.frontiers[1]) {
+//          MDD& mdd_i = DB.mdd_by_id[mdd_i_id];
+//          for (Vertex* i_next : mdd_i.frontiers[1]) {
+          for (Vertex* i_next : i_start->neighbor) {
             if (i_next == i_start) continue;
             bool success = test_constrained_move_conflicts(G, D, &DB, i_start, i_next, i_goal, j_start, j_goal);
             if (success) successes++; else failures++;
