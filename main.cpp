@@ -1,6 +1,7 @@
 #include <argparse/argparse.hpp>
 #include <filesystem>
 #include <iostream>
+#include <sys/resource.h>
 #include <lacam.hpp>
 #include <drawing.hpp>
 #include <mdd.hpp>
@@ -20,6 +21,9 @@ int main(int argc, char *argv[])
       .help("use pair db (folder derived from map name)")
       .default_value(false)
       .implicit_value(true);
+  program.add_argument("-H", "--H")
+      .help("horizon for the pair db (required with --pair-db / --pair-db-gen)")
+      .default_value(std::string("-1"));
   program.add_argument("-N", "--num").help("number of agents").required();
   program.add_argument("-s", "--seed")
       .help("seed")
@@ -115,12 +119,20 @@ int main(int argc, char *argv[])
   const auto scen_name = program.get<std::string>("scen");
   const auto seed = std::stoi(program.get<std::string>("seed"));
   const auto map_name = program.get<std::string>("map");
-  const auto pair_db_name = std::filesystem::path(map_name).stem().string();  program.add_argument("-l", "--log_short")
+  const auto H = std::stoi(program.get<std::string>("H"));
+  program.add_argument("-l", "--log_short")
       .default_value(false)
       .implicit_value(true);
    const auto gen_pair_db = program.get<bool>("pair-db-gen");
   const auto asha_planner = program.get<bool>("asha");
   const auto use_pair_db = program.get<bool>("pair-db");
+  if ((use_pair_db || gen_pair_db) && H < 0) {
+    std::cerr << "error: -H/--H <horizon> is required with --pair-db and --pair-db-gen" << std::endl;
+    return 1;
+  }
+  const auto pair_db_name = (use_pair_db || gen_pair_db)
+      ? "H_" + std::to_string(H) + "_" + std::filesystem::path(map_name).stem().string()
+      : std::filesystem::path(map_name).stem().string();
   if (use_pair_db && (map_name.size() < 4 || map_name.substr(map_name.size() - 4) != ".map")) {
     std::cerr << "error: map file must have a .map extension to use --pair-db" << std::endl;
     return 1;
@@ -163,12 +175,21 @@ int main(int argc, char *argv[])
       std::stof(program.get<std::string>("checkpoints-duration")) * 1000;
 
   if (gen_pair_db) {
+    const auto db_deadline = Deadline();
+    HorizonPairDBGenerator::HORIZON = H;
+    HorizonPairDBGenerator::MDD_SIZE = H + 2;
     HorizonPairDBGenerator* db = new HorizonPairDBGenerator(ins.G, pair_db_name);
     db->generate_mdds();
     db->flag_mdds_for_conflicts();
     db->generate_sync_time_conflicts();
     db->generate_constrained_move_conflicts();
     db->save_to_file();
+    std::cout << "db generation took " << db_deadline.elapsed_ms() / 1000.0
+              << " sec" << std::endl;
+    struct rusage usage;
+    getrusage(RUSAGE_SELF, &usage);
+    std::cout << "peak memory usage: " << usage.ru_maxrss / 1024.0 << " MB"
+              << std::endl;
     exit(0);
   }
 

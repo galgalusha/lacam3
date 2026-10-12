@@ -19,7 +19,8 @@
 
 
 // Number of steps ahead we are aware of
-int HorizonPairDBGenerator::HORIZON = 5;
+int HorizonPairDBGenerator::HORIZON = 7;
+static const int NUM_OF_THREADS = 12;
 
 // MDD::frontiers[0] is the start vertex (time 0).
 // This is why we add 1 to HORIZON.
@@ -28,7 +29,6 @@ int HorizonPairDBGenerator::HORIZON = 5;
 // Thats why we add another 1.
 int HorizonPairDBGenerator::MDD_SIZE = HorizonPairDBGenerator::HORIZON + 2;
 
-static const int NUM_OF_THREADS = 8;
 
 // Runs a dedicated thread that redraws the progress bar at a fixed rate while
 // workers only bump the atomic counter. The calling thread waits for all
