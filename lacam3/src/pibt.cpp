@@ -4,8 +4,8 @@
 
 HorizonPairDB* PIBT::pair_db = nullptr;
 
-const double DH_WEIGHT         = 0.01;
-const double RANDOM_TIE_WEIGHT = 0.1;
+const double DH_WEIGHT         = 0.1;
+const double RANDOM_TIE_WEIGHT = 0.01;
 const double DISCOUNT_FACTOR   = 0.50;
 
 
