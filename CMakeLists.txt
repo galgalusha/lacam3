@@ -25,6 +25,11 @@ target_compile_features(eval_runner PUBLIC cxx_std_17)
 target_include_directories(eval_runner PRIVATE ./third_party/cereal/include)
 target_link_libraries(eval_runner lacam3)
 
+add_executable(eval_ui eval_ui.cpp)
+target_compile_features(eval_ui PUBLIC cxx_std_17)
+add_dependencies(eval_ui eval_runner)
+target_link_libraries(eval_ui lacam3)
+
 # test
 enable_testing()
 file(GLOB TEST_FILES "./tests/test_*.cpp")
