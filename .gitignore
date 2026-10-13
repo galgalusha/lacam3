@@ -44,3 +44,4 @@ map
 scen
 **/local/
 *.bin
+mapf_db/

@@ -98,6 +98,65 @@ long count_lines(const std::string& path)
   return n;
 }
 
+struct Stats {
+  long total = 0;
+  long successes = 0;
+  double avg_cost = 0;  // over successful runs only (failed runs have no cost)
+  double avg_runtime_ms = 0;
+  double avg_iterations = 0;
+  double avg_explorations = 0;
+};
+
+// Parses all well-formed rows; a partial or truncated row is ignored.
+bool compute_stats(const std::string& path, Stats& st)
+{
+  std::ifstream in(path);
+  if (!in) return false;
+  st = Stats();
+  double cost = 0, runtime = 0, iters = 0, expl = 0;
+  std::string line;
+  bool first = true;
+  while (std::getline(in, line)) {
+    if (first) {
+      first = false;
+      continue;
+    }
+    std::vector<std::string> f;
+    std::stringstream ss(line);
+    std::string field;
+    while (f.size() < 7 && std::getline(ss, field, ',')) f.push_back(field);
+    if (f.size() < 7 || (f[1] != "true" && f[1] != "false")) continue;
+    try {
+      size_t pos;
+      const double rt = std::stod(f[0], &pos);
+      if (pos != f[0].size()) continue;
+      const double c = std::stod(f[2], &pos);
+      if (pos != f[2].size()) continue;
+      const double it = std::stod(f[3], &pos);
+      if (pos != f[3].size()) continue;
+      const double ex = std::stod(f[4], &pos);
+      if (pos != f[4].size()) continue;
+      ++st.total;
+      runtime += rt;
+      iters += it;
+      expl += ex;
+      if (f[1] == "true") {
+        ++st.successes;
+        cost += c;
+      }
+    } catch (const std::exception&) {
+      continue;
+    }
+  }
+  if (st.total > 0) {
+    st.avg_runtime_ms = runtime / st.total;
+    st.avg_iterations = iters / st.total;
+    st.avg_explorations = expl / st.total;
+  }
+  if (st.successes > 0) st.avg_cost = cost / st.successes;
+  return true;
+}
+
 std::string eval_runner_path()
 {
   char buf[4096];
@@ -260,6 +319,9 @@ struct Canvas {
   }
 };
 
+bool g_show_stats = false;
+Stats g_stats;
+
 void draw(int selected, int& top)
 {
   winsize ws{};
@@ -355,6 +417,36 @@ void draw(int selected, int& top)
     std::string bar = "[" + std::string(filled, '#') + std::string(bar_w - filled, '.') + "]";
     cv.text(2, px, bar, BAR, pe);
     cv.text(2, px + bar.size(), label, NORMAL, pe);
+  }
+
+  // stats pane (replaces the json pane)
+  if (g_show_stats) {
+    char buf[64];
+    auto num = [&](double v) {
+      snprintf(buf, sizeof buf, "%.2f", v);
+      return std::string(buf);
+    };
+    const double rate = g_stats.total > 0 ? 100.0 * g_stats.successes / g_stats.total : 0;
+    const std::vector<std::pair<std::string, std::string>> rows = {
+        {"Average cost", num(g_stats.avg_cost)},
+        {"Success rate", num(rate) + "%"},
+        {"Average runtime", num(g_stats.avg_runtime_ms) + " ms"},
+        {"Average iterations", num(g_stats.avg_iterations)},
+        {"Average explorations", num(g_stats.avg_explorations)},
+        {"Total runs", std::to_string(g_stats.total)}};
+    int r = prog_sep + 1;
+    cv.text(r++, px, "Statistics (snapshot, F3 to refresh)", KEYS, pe + 1);
+    ++r;
+    for (const auto& [label, value] : rows) {
+      cv.text(r, px, label, NORMAL, pe + 1);
+      cv.text(r, px + 24, value, KEYS, pe + 1);
+      ++r;
+    }
+    ++r;
+    cv.text(r, px, "Cost is averaged over successful runs only.", NORMAL, pe + 1);
+    std::string out = "\x1b[?25l" + cv.render();
+    (void)!write(STDOUT_FILENO, out.data(), out.size());
+    return;
   }
 
   // json pane
@@ -473,8 +565,23 @@ int main()
     const std::string buf(tmp, n);
     for (size_t pos = 0; pos < buf.size();) {
       switch (next_key(buf, pos)) {
-        case UP: if (selected > 0) --selected; break;
-        case DOWN: if (selected + 1 < (int)g_names.size()) ++selected; break;
+        case UP:
+          if (selected > 0) {
+            --selected;
+            g_show_stats = false;
+          }
+          break;
+        case DOWN:
+          if (selected + 1 < (int)g_names.size()) {
+            ++selected;
+            g_show_stats = false;
+          }
+          break;
+        case F3:
+          if (!g_names.empty()) {
+            g_show_stats = compute_stats(csv_path(g_names[selected]), g_stats);
+          }
+          break;
         case F1: if (!g_names.empty()) start_run(g_names[selected], false); break;
         case F2: if (!g_names.empty()) start_run(g_names[selected], true); break;
         case QUIT: g_quit = true; break;
