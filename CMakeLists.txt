@@ -20,6 +20,11 @@ target_compile_features(main PUBLIC cxx_std_17)
 # target_link_options(main PRIVATE -flto)
 target_link_libraries(main lacam3 argparse)
 
+add_executable(eval_runner eval_runner.cpp)
+target_compile_features(eval_runner PUBLIC cxx_std_17)
+target_include_directories(eval_runner PRIVATE ./third_party/cereal/include)
+target_link_libraries(eval_runner lacam3)
+
 # test
 enable_testing()
 file(GLOB TEST_FILES "./tests/test_*.cpp")
