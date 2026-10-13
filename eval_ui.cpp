@@ -107,7 +107,7 @@ std::string eval_runner_path()
   return (fs::path(buf).parent_path() / "eval_runner").string();
 }
 
-void start_run(const std::string& name)
+void start_run(const std::string& name, bool recover)
 {
   std::lock_guard<std::mutex> lock(g_mutex);
   if (g_children.count(name)) return;
@@ -123,7 +123,11 @@ void start_run(const std::string& name)
       dup2(null_fd, 1);
       dup2(null_fd, 2);
     }
-    execl(runner.c_str(), runner.c_str(), json.c_str(), (char*)nullptr);
+    if (recover) {
+      execl(runner.c_str(), runner.c_str(), "-recover", json.c_str(), (char*)nullptr);
+    } else {
+      execl(runner.c_str(), runner.c_str(), json.c_str(), (char*)nullptr);
+    }
     _exit(127);
   }
   g_children[name] = pid;
@@ -471,7 +475,8 @@ int main()
       switch (next_key(buf, pos)) {
         case UP: if (selected > 0) --selected; break;
         case DOWN: if (selected + 1 < (int)g_names.size()) ++selected; break;
-        case F1: if (!g_names.empty()) start_run(g_names[selected]); break;
+        case F1: if (!g_names.empty()) start_run(g_names[selected], false); break;
+        case F2: if (!g_names.empty()) start_run(g_names[selected], true); break;
         case QUIT: g_quit = true; break;
         default: break;
       }

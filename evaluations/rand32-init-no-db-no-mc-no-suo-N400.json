@@ -3,7 +3,7 @@
   "num_of_agents": 400,
   "num_of_scenes": 20,
   "objective": 2,
-  "seeds_per_scene": 100,
+  "seeds_per_scene": 30,
   "pair_db": false,
   "pair_db_horizon": 0,
   "no_star": true,
