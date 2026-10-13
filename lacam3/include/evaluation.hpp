@@ -10,6 +10,7 @@
 
 struct EvalConfig {
   std::string file_name;
+  bool recover = false;  // continue from existing results CSV
   std::string asset;
   int num_of_agents = 1;
   int num_of_scenes = 1;
@@ -52,6 +53,8 @@ struct EvalRunner {
    * a new Planner and run it to get a PlannerResult.
    * Then, create EvalResultRow and write it to a CSV file
    * in evaluations/${config.file_name}.results.csv
+   * If conf.recover is set and the CSV exists, completed (scen, seed)
+   * rows are kept and only the remaining runs are executed.
    */
   void run_config(EvalConfig& conf);
 

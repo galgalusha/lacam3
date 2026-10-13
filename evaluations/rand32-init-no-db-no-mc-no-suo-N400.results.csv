@@ -1,10 +1,10 @@
 run_time_milliseconds,is_success,cost,num_of_iterations,num_of_explorations,seed,scen_name
-72,true,28455,123,117,0,random-32-32-20-random-1.scen
+69,true,28455,123,117,0,random-32-32-20-random-1.scen
 65,true,27325,100,100,1,random-32-32-20-random-1.scen
 75,true,29821,113,113,2,random-32-32-20-random-1.scen
-70,true,27834,101,101,0,random-32-32-20-random-10.scen
-75,true,28494,111,111,1,random-32-32-20-random-10.scen
-70,true,28892,99,99,2,random-32-32-20-random-10.scen
-80,true,30352,122,121,0,random-32-32-20-random-11.scen
-83,true,30717,126,123,1,random-32-32-20-random-11.scen
-78,true,29884,120,120,2,random-32-32-20-random-11.scen
+118,true,27834,101,101,0,random-32-32-20-random-10.scen
+95,true,28494,111,111,1,random-32-32-20-random-10.scen
+78,true,28892,99,99,2,random-32-32-20-random-10.scen
+93,true,30352,122,121,0,random-32-32-20-random-11.scen
+93,true,30717,126,123,1,random-32-32-20-random-11.scen
+91,true,29884,120,120,2,random-32-32-20-random-11.scen

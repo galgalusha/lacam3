@@ -4,6 +4,8 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <set>
+#include <sstream>
 #include <stdexcept>
 #include <vector>
 
@@ -81,6 +83,44 @@ std::vector<fs::path> find_scenarios(const fs::path& directory,
   return scenarios;
 }
 
+// Keeps only complete, well-formed rows (a crash may leave a truncated last
+// line) and returns the (scen_name, seed) pairs already finished.
+std::set<std::pair<std::string, int>> load_finished_runs(
+    const fs::path& csv_path, std::vector<std::string>& valid_lines)
+{
+  std::set<std::pair<std::string, int>> finished;
+  std::ifstream in(csv_path);
+  std::string line;
+  bool first = true;
+  while (std::getline(in, line)) {
+    if (first) {
+      first = false;
+      continue;
+    }
+    std::vector<std::string> fields;
+    std::stringstream ss(line);
+    std::string field;
+    while (fields.size() < 6 && std::getline(ss, field, ',')) {
+      fields.push_back(field);
+    }
+    std::string scen;
+    if (fields.size() < 6 || !std::getline(ss, scen) || scen.empty()) continue;
+    try {
+      size_t pos = 0;
+      for (int k : {0, 2, 3, 4, 5}) {
+        std::stoi(fields[k], &pos);
+        if (pos != fields[k].size()) throw std::invalid_argument("");
+      }
+      if (fields[1] != "true" && fields[1] != "false") continue;
+      finished.emplace(scen, std::stoi(fields[5]));
+      valid_lines.push_back(line);
+    } catch (const std::exception&) {
+      continue;
+    }
+  }
+  return finished;
+}
+
 }  // namespace
 
 void EvalRunner::run_config(EvalConfig& conf)
@@ -109,6 +149,15 @@ void EvalRunner::run_config(EvalConfig& conf)
   if (!output_path.parent_path().empty()) {
     fs::create_directories(output_path.parent_path());
   }
+  std::set<std::pair<std::string, int>> finished;
+  std::vector<std::string> kept_lines;
+  if (conf.recover && fs::is_regular_file(output_path)) {
+    finished = load_finished_runs(output_path, kept_lines);
+    std::cout << "recovering: " << finished.size()
+              << " runs already finished" << std::endl;
+  }
+
+  // rewrite the file with only valid rows so that appends stay well-formed
   std::ofstream output(output_path, std::ios::out | std::ios::trunc);
   if (!output) {
     throw std::runtime_error("could not open evaluation output file '" +
@@ -117,6 +166,8 @@ void EvalRunner::run_config(EvalConfig& conf)
 
   output << "run_time_milliseconds,is_success,cost,num_of_iterations,"
             "num_of_explorations,seed,scen_name\n";
+  for (const auto& kept : kept_lines) output << kept << '\n';
+  output.flush();
   if (!output) {
     throw std::runtime_error("could not write evaluation output file '" +
                              output_path.string() + "'");
@@ -129,6 +180,13 @@ void EvalRunner::run_config(EvalConfig& conf)
   Planner::REFINER_NUM = conf.refiner_num;
 
   for (const auto& scen_path : scenarios) {
+    const auto scen_name = scen_path.filename().string();
+    bool all_done = true;
+    for (int seed = 0; seed < conf.seeds_per_scene; ++seed) {
+      if (!finished.count({scen_name, seed})) all_done = false;
+    }
+    if (all_done) continue;
+
     const Instance instance(scen_path.string(), map_path.string(),
                             conf.num_of_agents);
     if (!instance.is_valid(conf.verbose)) {
@@ -153,6 +211,7 @@ void EvalRunner::run_config(EvalConfig& conf)
     }
 
     for (int seed = 0; seed < conf.seeds_per_scene; ++seed) {
+      if (finished.count({scen_name, seed})) continue;
       const Deadline deadline(
           static_cast<double>(conf.timeout_seconds) * 1000.0);
       Planner::MSG.clear();
@@ -171,7 +230,7 @@ void EvalRunner::run_config(EvalConfig& conf)
              << (result.is_success ? "true" : "false") << ',' << result.cost
              << ',' << result.num_of_iterations << ','
              << result.num_of_explorations << ',' << seed << ','
-             << csv_escape(scen_path.filename().string()) << '\n';
+             << csv_escape(scen_name) << '\n';
       output.flush();
       if (!output) {
         throw std::runtime_error("failed while writing evaluation output file '" +

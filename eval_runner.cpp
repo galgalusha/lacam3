@@ -24,11 +24,24 @@ static void load_conf(cereal::JSONInputArchive &ar, EvalConfig &c)
 
 int main(int argc, char *argv[])
 {
-  if (argc != 2) {
-    std::cerr << "usage: " << argv[0] << " <evaluation.json>" << std::endl;
+  std::string path;
+  bool recover = false;
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg = argv[i];
+    if (arg == "-recover" || arg == "--recover") {
+      recover = true;
+    } else if (path.empty()) {
+      path = arg;
+    } else {
+      path.clear();
+      break;
+    }
+  }
+  if (path.empty()) {
+    std::cerr << "usage: " << argv[0] << " [-recover] <evaluation.json>"
+              << std::endl;
     return 1;
   }
-  const std::string path = argv[1];
   try {
     std::ifstream in(path);
     if (!in) throw std::runtime_error("cannot open " + path);
@@ -37,6 +50,7 @@ int main(int argc, char *argv[])
       cereal::JSONInputArchive archive(in);
       load_conf(archive, conf);
     }
+    conf.recover = recover;
     conf.file_name = std::filesystem::path(path).stem().string();
     EvalRunner().run_config(conf);
     std::cout << "evaluation finished: evaluations/" << conf.file_name
