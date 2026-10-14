@@ -1,0 +1,9 @@
+run_time_milliseconds,is_success,cost,num_of_iterations,num_of_explorations,seed,scen_name
+32012,true,216621,388,387,0,den312d-random-1.scen
+31186,true,217799,382,379,1,den312d-random-1.scen
+31095,true,216669,354,353,2,den312d-random-1.scen
+31976,true,219035,380,379,3,den312d-random-1.scen
+31901,true,224656,374,370,4,den312d-random-1.scen
+32687,true,215316,364,356,5,den312d-random-1.scen
+32306,true,222614,389,388,6,den312d-random-1.scen
+31853,true,220819,411,403,7,den312d-random-1.scen
