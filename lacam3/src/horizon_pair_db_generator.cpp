@@ -189,127 +189,107 @@ uint8_t HorizonPairDBGenerator::calculate_time_shifted_penalty(MDD& mdd_next, MD
 }
 
 
-void HorizonPairDBGenerator::flag_mdds_for_conflicts() {
-  flagged_for_conflict.assign(mdd_count, {});
+static std::string temp_path_prefix(const std::string& name) {
+  return HORIZON_PAIR_DB_ROOT_FOLDER + name;
+}
 
-  const uint32_t total = mdd_count;
-  std::atomic<uint32_t> done = 0;
+static void write_bulk_section(std::ofstream& out, const std::vector<std::vector<HorizonPairDBGenerator::MDD_Penalty>>& bulk, int local_size) {
+  for (int i = 0; i < local_size; i++) {
+    uint32_t num_entries = static_cast<uint32_t>(bulk[i].size());
+    out.write(reinterpret_cast<const char*>(&num_entries), sizeof(num_entries));
+    for (const auto& entry : bulk[i]) {
+      out.write(reinterpret_cast<const char*>(&entry.mdd_id), sizeof(entry.mdd_id));
+      out.write(reinterpret_cast<const char*>(&entry.penalty), sizeof(entry.penalty));
+    }
+  }
+}
 
 
-  ThreadPool pool(NUM_OF_THREADS);
+void HorizonPairDBGenerator::generate_all_conflicts_in_bulks(int bulk_size) {
+  std::filesystem::create_directories(HORIZON_PAIR_DB_ROOT_FOLDER);
+  const std::string temp_sync_path = temp_path_prefix(name) + "_sync_conflicts.tmp";
+  const std::string temp_async_path = temp_path_prefix(name) + "_async_conflicts.tmp";
+  std::ofstream out_sync(temp_sync_path, std::ios::binary | std::ios::trunc);
+  std::ofstream out_async(temp_async_path, std::ios::binary | std::ios::trunc);
+  if (!out_sync || !out_async) throw std::runtime_error("Failed to open temporary conflict files");
 
-  // Maps each worker thread to a fixed slot so it can reuse its own 'visited' vector.
-  std::unordered_map<std::thread::id, int> thread_slot;
-  for (int i = 0; i < (int)pool.workers.size(); i++)
-    thread_slot[pool.workers[i].get_id()] = i;
+  const int num_bulks = (static_cast<int>(mdd_count) + bulk_size - 1) / bulk_size;
+  std::cout << "Generating conflicts in " << num_bulks << " bulks" << std::endl;
 
-  // One 'visited' vector per thread, pre-allocated and reused across mdd_ids.
-  std::vector<std::vector<bool>> visited_per_thread(
-      pool.workers.size(), std::vector<bool>(mdd_count, false));
+  for (int bulk = 0; bulk < num_bulks; bulk++) {
+    const int start_mdd_id = bulk * bulk_size;
+    const int end_mdd_id = std::min(static_cast<int>(mdd_count), start_mdd_id + bulk_size);
+    const int local_size = end_mdd_id - start_mdd_id;
 
-  // Task processes a SINGLE mdd_id. flagged_for_conflict[mdd_id] is only ever
-  // written by this task, so no lock is needed for it.
-  auto task = [&](uint32_t mdd_id) {
-    std::vector<bool>& visited = visited_per_thread[thread_slot.at(std::this_thread::get_id())];
-    std::fill(visited.begin(), visited.end(), false);
+    std::vector<std::vector<MDD_Penalty>> bulk_sync(local_size);
+    std::vector<std::vector<MDD_Penalty>> bulk_async(local_size);
 
-    MDD& mdd = mdd_by_id[mdd_id];
-    std::vector<uint32_t>& flagged = flagged_for_conflict[mdd_id];
-    for (int t = 0; t < MDD_SIZE; t++) {
-      for (Vertex* v : mdd.frontiers[t]) {
-        
-        int NUM_OF_TIME_SHIFTS = 1;
-        std::vector<uint32_t>* timeshift_to_other_mdds[3]; 
-        size_t t_s = static_cast<size_t>(t) * G->V.size() + v->id;
-        timeshift_to_other_mdds[0] = &mdd_by_t_s[t_s];
-        
-        if (t < MDD_SIZE - 1) {
-          size_t t_plus_1_s = static_cast<size_t>(t + 1) * G->V.size() + v->id;
-          timeshift_to_other_mdds[NUM_OF_TIME_SHIFTS] = &mdd_by_t_s[t_plus_1_s];
-          NUM_OF_TIME_SHIFTS++;
-        }
-        
-        if (t > 0) {
-          size_t t_minus_1_s = static_cast<size_t>(t - 1) * G->V.size() + v->id;
-          timeshift_to_other_mdds[NUM_OF_TIME_SHIFTS] = &mdd_by_t_s[t_minus_1_s];
-          NUM_OF_TIME_SHIFTS++;
-        }
+    ThreadPool pool(NUM_OF_THREADS);
+    std::unordered_map<std::thread::id, int> thread_slot;
+    for (int i = 0; i < (int)pool.workers.size(); i++)
+      thread_slot[pool.workers[i].get_id()] = i;
+    std::vector<std::vector<bool>> visited_per_thread(
+        pool.workers.size(), std::vector<bool>(mdd_count, false));
 
-        for (int dt = 0; dt < NUM_OF_TIME_SHIFTS; dt++) {
-          std::vector<uint32_t>& mdd_set = *timeshift_to_other_mdds[dt];
+    std::atomic<uint32_t> done = 0;
 
-          for (uint32_t other_mdd_id : mdd_set) {
-            if (other_mdd_id <= mdd_id) continue;
-            
-            if (visited[other_mdd_id]) continue;
-            visited[other_mdd_id] = true;
+    // Each task writes only to bulk_*[local_idx], so no locking is needed.
+    auto task = [&](int mdd_id) {
+      const int local_idx = mdd_id - start_mdd_id;
+      std::vector<bool>& visited = visited_per_thread[thread_slot.at(std::this_thread::get_id())];
+      std::fill(visited.begin(), visited.end(), false);
 
-            MDD& other_mdd = mdd_by_id[other_mdd_id];
-            if (other_mdd.frontiers[0][0]->id == mdd.frontiers[0][0]->id) continue;
+      MDD& mdd = mdd_by_id[mdd_id];
+      std::vector<uint32_t> candidates;
+      for (int t = 0; t < MDD_SIZE; t++) {
+        for (Vertex* v : mdd.frontiers[t]) {
+          std::vector<uint32_t>* sets[3];
+          int num_sets = 0;
+          sets[num_sets++] = &mdd_by_t_s[static_cast<size_t>(t) * G->V.size() + v->id];
+          if (t < MDD_SIZE - 1)
+            sets[num_sets++] = &mdd_by_t_s[static_cast<size_t>(t + 1) * G->V.size() + v->id];
+          if (t > 0)
+            sets[num_sets++] = &mdd_by_t_s[static_cast<size_t>(t - 1) * G->V.size() + v->id];
 
-            flagged.push_back(other_mdd_id);
+          for (int k = 0; k < num_sets; k++) {
+            for (uint32_t other_mdd_id : *sets[k]) {
+              if (visited[other_mdd_id]) continue;
+              visited[other_mdd_id] = true;
+              if (mdd_by_id[other_mdd_id].frontiers[0][0]->id == mdd.frontiers[0][0]->id) continue;
+              candidates.push_back(other_mdd_id);
+            }
           }
         }
       }
-    }
+      std::sort(candidates.begin(), candidates.end());
+      candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
 
-    std::sort(flagged.begin(), flagged.end());
-    flagged.erase(std::unique(flagged.begin(), flagged.end()), flagged.end());
-
-    ++done;
-  };
-
-  std::vector<std::future<void>> futures;
-  futures.reserve(mdd_count);
-  for (uint32_t mdd_id = 0; mdd_id < mdd_count; mdd_id++)
-    futures.push_back(pool.submit([&task, mdd_id]() { task(mdd_id); }));
-
-  wait_with_progress(futures, done, total);
-  std::cout << std::endl;
-}
-
-
-void HorizonPairDBGenerator::generate_sync_time_conflicts() {
-  std::cout << "Generating sync-time penalties" << std::endl;
-  penalties.resize(mdd_count);
-  std::atomic<uint32_t> num_of_conflicts1 = 0;
-  std::atomic<uint32_t> num_of_conflicts2 = 0;
-
-  const uint32_t total = mdd_count;
-  std::atomic<uint32_t> done = 0;
-
-
-  ThreadPool pool(NUM_OF_THREADS);
-
-  // Task processes a SINGLE mdd_id. penalties[mdd_id] is only ever written by
-  // this task, so no lock is needed for it.
-  auto task = [&](uint32_t mdd_id) {
-    MDD& mdd = mdd_by_id[mdd_id];
-    for (uint32_t other_mdd_id : flagged_for_conflict[mdd_id]) {
-      MDD& other_mdd = mdd_by_id[other_mdd_id];
-      uint8_t penalty = calculate_sync_time_penalty(mdd, other_mdd);
-
-      if (penalty > 0) {
-        penalties[mdd_id].push_back({other_mdd_id, penalty});
-        if (penalty == 1)
-          num_of_conflicts1++;
-        else
-          num_of_conflicts2++;
+      for (uint32_t other_mdd_id : candidates) {
+        uint8_t penalty = calculate_time_shifted_penalty(mdd, mdd_by_id[other_mdd_id]);
+        if (penalty > 0) bulk_async[local_idx].push_back({other_mdd_id, penalty});
       }
-    }
+      for (uint32_t other_mdd_id : candidates) {
+        if ((uint32_t)mdd_id >= other_mdd_id) continue;
+        uint8_t penalty = calculate_sync_time_penalty(mdd, mdd_by_id[other_mdd_id]);
+        if (penalty > 0) bulk_sync[local_idx].push_back({other_mdd_id, penalty});
+      }
+      ++done;
+    };
 
-    ++done;
-  };
+    std::vector<std::future<void>> futures;
+    futures.reserve(local_size);
+    for (int mdd_id = start_mdd_id; mdd_id < end_mdd_id; mdd_id++)
+      futures.push_back(pool.submit([&task, mdd_id]() { task(mdd_id); }));
 
-  std::vector<std::future<void>> futures;
-  futures.reserve(mdd_count);
-  for (uint32_t mdd_id = 0; mdd_id < mdd_count; mdd_id++)
-    futures.push_back(pool.submit([&task, mdd_id]() { task(mdd_id); }));
+    std::cout << "Bulk " << (bulk + 1) << "/" << num_bulks << std::endl;
+    wait_with_progress(futures, done, local_size);
+    std::cout << std::endl;
 
-  wait_with_progress(futures, done, total);
-  std::cout << "\nNum of conflicts with penalty 1: " << num_of_conflicts1.load() << std::endl;
-  std::cout << "Num of conflicts with penalty 2: " << num_of_conflicts2.load() << std::endl;
+    write_bulk_section(out_sync, bulk_sync, local_size);
+    write_bulk_section(out_async, bulk_async, local_size);
+  }
 }
+
 
 
 // TODO: this logic only works for grid graphs and won't work for general graphs.
@@ -336,53 +316,6 @@ MDD create_constrained_move_MDD(MDD& mdd1, Vertex* next_v1) {
     }
   }
   return new_mdd;
-}
-
-
-void HorizonPairDBGenerator::generate_constrained_move_conflicts() {
-  time_shifted_penalties.resize(mdd_count);
-
-  const uint32_t total = mdd_count;
-  std::atomic<uint32_t> done = 0;
-
-  std::cout << "Calculating reverse conflict flags... " << std::endl;
-  std::vector<std::vector<uint32_t>> reversed_flagged_for_conflict(mdd_count);
-  for (uint32_t mdd1 = 0; mdd1 < mdd_count; mdd1++) {
-    for (uint32_t mdd2 : flagged_for_conflict[mdd1]) {
-      reversed_flagged_for_conflict[mdd2].push_back(mdd1);
-    }
-  }
-
-  std::cout << "Generating time shifted conflicts" << std::endl;
-
-  ThreadPool pool(NUM_OF_THREADS);
-
-  auto task = [&](uint32_t mdd_id) {
-    MDD& mdd = mdd_by_id[mdd_id];
-    for (uint32_t other_mdd_id : flagged_for_conflict[mdd_id]) {
-      MDD& other_mdd = mdd_by_id[other_mdd_id];
-      uint8_t penalty = calculate_time_shifted_penalty(mdd, other_mdd);
-      if (penalty > 0) {
-        time_shifted_penalties[mdd_id].push_back( { other_mdd_id, penalty });
-      }
-    }
-    for (uint32_t other_mdd_id : reversed_flagged_for_conflict[mdd_id]) {
-      MDD& other_mdd = mdd_by_id[other_mdd_id];
-      uint8_t penalty = calculate_time_shifted_penalty(mdd, other_mdd);
-      if (penalty > 0) {
-        time_shifted_penalties[mdd_id].push_back( { other_mdd_id, penalty });
-      }
-    }
-    ++done;
-  };
-
-  std::vector<std::future<void>> futures;
-  futures.reserve(mdd_count);
-  for (uint32_t mdd_id = 0; mdd_id < mdd_count; mdd_id++)
-    futures.push_back(pool.submit([&task, mdd_id]() { task(mdd_id); }));
-
-  wait_with_progress(futures, done, total);
-  std::cout << std::endl;
 }
 
 
@@ -436,308 +369,6 @@ void HorizonPairDBGenerator::interactive_mdd_test() {
 }
 
 
-uint8_t HorizonPairDBGenerator::get_penalty(Vertex* v1, Vertex* g1, Vertex* v2, Vertex* g2) {
-  uint32_t agent1 = v1->id * V_SIZE + g1->id;
-  uint32_t agent2 = v2->id * V_SIZE + g2->id;
-  uint32_t mdd_id1 = mdd_id_by_v_g[agent1];
-  uint32_t mdd_id2 = mdd_id_by_v_g[agent2];
-  uint32_t min_mdd_id = mdd_id1 < mdd_id2 ? mdd_id1 : mdd_id2;
-  uint32_t max_mdd_id = mdd_id1 > mdd_id2 ? mdd_id1 : mdd_id2;
-  for (const MDD_Penalty& entry : penalties[min_mdd_id]) {
-    if (entry.mdd_id == max_mdd_id) return entry.penalty;
-  }
-  return 0;
-};
-
-
-uint8_t HorizonPairDBGenerator::get_constrained_move_penalty(Vertex* v1, Vertex* v1_next, Vertex* g1, Vertex* v2, Vertex* g2) {
-  uint32_t agent2 = v2->id * V_SIZE + g2->id;
-  uint32_t mdd_id2 = mdd_id_by_v_g[agent2];
-
-  // Scenario 3: agent 1 pushes agent 2
-  if (v2->id == v1_next->id) {
-    MDD& mdd2_now = mdd_by_id[mdd_id2];
-    if (mdd2_now.frontiers[1].size() == 0 && mdd2_now.frontiers[1][0]->id == v2->id) {
-      // Agent 2 is stanging at its goal
-      return 2;
-    }
-    uint8_t penalty = 2;
-    for (Vertex* v2_next : mdd2_now.frontiers[1]) {
-      if (v2_next->id == v1->id) continue;
-      int8_t p = get_penalty(v1_next, g1, v2_next, g2);
-      if (p == 0) return 0;
-      if (p < penalty) penalty = p;
-    }
-    return penalty; 
-  }
-
-  // Scenario 2: agent 1 is at v1_next at time t+1, agent 2 is at v2 at time t.
-  uint32_t agent1 = v1_next->id * V_SIZE + g1->id;
-  uint32_t mdd1 = mdd_id_by_v_g[agent1];
-  const auto& entries = time_shifted_penalties[mdd1];
-  std::cout << "mdd2: " << mdd_id2 << std::endl;
-  std::cout << "shifted penalties of " << mdd1 << std::endl;
-  for (const MDD_Penalty& entry : entries) {
-    std::cout << entry.mdd_id << std::endl;
-    if (entry.mdd_id == mdd_id2) return entry.penalty;
-  }
-  return 0;
-};
-
-
-void HorizonPairDBGenerator::test_db_1() {
-  std::cout << "Running test_db_1" << std::endl;
-  std::vector<std::string> grid = {
-    ".@.",
-    "...",
-    "...",
-  };
-
-  Graph* G = new Graph(grid);
-  HorizonPairDBGenerator DB(G, "test");
-  DB.generate_mdds();
-  DB.flag_mdds_for_conflicts();
-  DB.generate_sync_time_conflicts();
-
-  auto coord = [G](int row, int col) {
-    auto index = G->width * row + col;
-    return G->U[index];
-  };
-
-  auto A_start = coord(0, 0);
-  auto A_goal  = coord(1, 2);
-
-  auto B_start = coord(1, 0);
-  auto B_goal  = coord(0, 2);
-
-  auto C_start = coord(1, 0);
-  auto C_goal  = coord(1, 1);
-
-  auto D_start = A_goal; // swap conflict with A
-  auto D_goal  = A_start;
-
-  int actual_penalty;
-  int expected_penalty;
-
-  //
-  // Test A, B
-  //
-  expected_penalty = 0;
-  actual_penalty = DB.get_penalty(A_start, A_goal, B_start, B_goal);
-  if (expected_penalty != actual_penalty) {
-    std::cout << "Got penalty != 0 for A and B" << std::endl;
-    exit(0);
-  }
-
-  //
-  // Test A, C
-  //
-  expected_penalty = 2;
-  actual_penalty = DB.get_penalty(A_start, A_goal, C_start, C_goal);
-  if (expected_penalty != actual_penalty) {
-    std::cout << "Got penalty != 2 for A and C" << std::endl;
-    exit(0);
-  }
-
-  //
-  // Test A, D
-  //
-  expected_penalty = 2;
-  actual_penalty = DB.get_penalty(A_start, A_goal, D_start, D_goal);
-  if (expected_penalty != actual_penalty) {
-    std::cout << "Got penalty != 2 for A and D" << std::endl;
-    exit(0);
-  }
-
-  delete G;
-}
-
-
-void HorizonPairDBGenerator::test_db_time_shift() {
-  std::cout << "Running test_db_time_shift" << std::endl;
-  std::vector<std::string> grid = {
-    ".@.",
-    "...",
-    "...",
-  };
-
-  Graph* G = new Graph(grid);
-  HorizonPairDBGenerator DB(G, "test");
-  DB.generate_mdds();
-  DB.flag_mdds_for_conflicts();
-  DB.generate_sync_time_conflicts();
-  DB.generate_constrained_move_conflicts();
-
-  auto coord = [G](int row, int col) {
-    auto index = G->width * row + col;
-    return G->U[index];
-  };
-
-  { // Scenario 1: A follows B (no conflict)
-    auto A_start = coord(0, 0);
-    auto A_next = coord(1, 0);
-    auto A_goal  = coord(1, 2);
-
-    auto B_start = coord(1, 0);
-    auto B_goal  = coord(0, 2);
-
-    int expected_penalty = 0;
-    int actual_penalty = DB.get_constrained_move_penalty(A_start, A_next, A_goal, B_start, B_goal);
-    if (expected_penalty != actual_penalty) {
-      std::cout << "Scenario 1 failed" << std::endl;
-      exit(0);
-    }
-  }
-  std::cout << "Scenario 1 passed" << std::endl;
-
-  { // Scenario 2: B moves first and interfere A
-    auto A_start = coord(0, 0);
-    auto A_goal  = coord(1, 2);
-
-    auto B_start = coord(1, 1);
-    auto B_next = coord(1, 0);
-    auto B_goal  = coord(2, 0);
-
-    int expected_penalty = 2;
-    int actual_penalty = DB.get_constrained_move_penalty(B_start, B_next, B_goal, A_start, B_goal);
-    if (expected_penalty != actual_penalty) {
-      std::cout << "Scenario 2 failed. Expected: 2, Actual: " << actual_penalty << std::endl;
-      exit(0);
-    }
-  }
-  std::cout << "Scenario 2 passed" << std::endl;
-
-  { // Scenario 3: A follows B but B's goal is on A's path (conflict)
-    auto A_start = coord(0, 0);
-    auto A_next = coord(1, 0);
-    auto A_goal  = coord(0, 2);
-
-    auto B_start = coord(1, 0);
-    auto B_goal  = coord(1, 2);
-
-    int expected_penalty = 2;
-    int actual_penalty = DB.get_constrained_move_penalty(A_start, A_next, A_goal, B_start, B_goal);
-    if (expected_penalty != actual_penalty) {
-      std::cout << "Scenario 3 failed" << std::endl;
-      exit(0);
-    }
-  }
-  std::cout << "Scenario 3 passed" << std::endl;
-
-  { // Scenario 4: Swap conflict when A pushes B
-    auto A_start = coord(0, 0);
-    auto A_next = coord(1, 0);
-    auto A_goal  = coord(0, 2);
-
-    auto B_start = coord(1, 0);
-    auto B_goal  = coord(0, 0);
-
-    int expected_penalty = 2;
-    int actual_penalty = DB.get_constrained_move_penalty(A_start, A_next, A_goal, B_start, B_goal);
-    if (expected_penalty != actual_penalty) {
-      std::cout << "Scenario 4 failed" << std::endl;
-      exit(0);
-    }
-  }
-  std::cout << "Scenario 4 passed" << std::endl;
-
-  { // Scenario 5: Swap conflict
-    auto A_start = coord(0, 0);
-    auto A_next = coord(1, 0); 
-    auto A_goal  = coord(0, 2);
-
-    auto B_start = coord(0, 2);
-    auto B_goal  = coord(0, 0);
-
-    auto C_start = coord(1, 2);
-    auto C_goal  = coord(0, 0);
-
-    int expected_penalty = 2;
-    int actual_penalty_B = DB.get_constrained_move_penalty(A_start, A_next, A_goal, B_start, B_goal);
-    int actual_penalty_C = DB.get_constrained_move_penalty(A_start, A_next, A_goal, C_start, C_goal);
-    if (expected_penalty != actual_penalty_B) {
-      std::cout << "Scenario 5 failed (B)" << std::endl;
-      exit(0);
-    }
-    if (expected_penalty != actual_penalty_C) {
-      std::cout << "Scenario 5 failed (C)" << std::endl;
-      exit(0);
-    }
-  }
-  std::cout << "Scenario 5 passed" << std::endl;
-
-  delete G;
-}
-
-
-void HorizonPairDBGenerator::test_db_time_shift_2() {
-  std::cout << "Running test_db_time_shift_2" << std::endl;
-  std::vector<std::string> grid = {
-    "....",
-    "....",
-    "....",
-    "....",
-  };
-
-  Graph* G = new Graph(grid);
-  HorizonPairDBGenerator DB(G, "test");
-  DB.generate_mdds();
-  DB.flag_mdds_for_conflicts();
-  DB.generate_sync_time_conflicts();
-  DB.generate_constrained_move_conflicts();
-
-  auto coord = [G](int row, int col) {
-    auto index = G->width * row + col;
-    return G->U[index];
-  };
-
-  // The famous vertex conflict example if there is not shift. A wait can resolve this conflict.
-  auto A_start = coord(1, 0);
-  auto A_goal  = coord(2, 3);
-
-  auto B_start = coord(0, 1);
-  auto B_goal  = coord(3, 2);
-
-  { // Scenario 1: No conflict when shifting B
-    auto A_next = coord(2, 0);
-    auto B_start = coord(0, 2);
-
-    int expected_penalty = 0;
-    int actual_penalty = DB.get_constrained_move_penalty(A_start, A_next, A_goal, B_start, B_goal);
-    if (expected_penalty != actual_penalty) {
-      std::cout << "Scenario 1 failed" << std::endl;
-      exit(0);
-    }
-  }
-  std::cout << "Scenario 1 passed" << std::endl;
-
-  { // Scenario 2: A conflict if A moves down
-    auto A_next = coord(2, 0);
-
-    int expected_penalty = 1;
-    int actual_penalty = DB.get_constrained_move_penalty(A_start, A_next, A_goal, B_start, B_goal);
-    if (expected_penalty != actual_penalty) {
-      std::cout << "Scenario 2 failed" << std::endl;
-      exit(0);
-    }
-  }
-  std::cout << "Scenario 2 passed" << std::endl;
-
-  { // Scenario 3: A conflict if A moves right
-    auto A_next = coord(1, 1);
-
-    int expected_penalty = 1;
-    int actual_penalty = DB.get_constrained_move_penalty(A_start, A_next, A_goal, B_start, B_goal);
-    if (expected_penalty != actual_penalty) {
-      std::cout << "Scenario 3 failed" << std::endl;
-      exit(0);
-    }
-  }
-  std::cout << "Scenario 3 passed" << std::endl;
-
-  delete G;
-}
-
 
 // ---------------------------------------------------------------------------
 // Serialization
@@ -785,87 +416,16 @@ void HorizonPairDBGenerator::write_mdd_id_by_v_g_section(std::ofstream& out) {
   std::cout << std::endl;
 }
 
-void HorizonPairDBGenerator::write_conflicts_section(std::ofstream& out) {
-  std::cout << "Saving conflicts..." << std::endl;
-  const uint32_t num_conflicts = static_cast<uint32_t>(penalties.size());
-  out.write(reinterpret_cast<const char*>(&num_conflicts), sizeof(num_conflicts));
-  for (uint32_t id = 0; id < num_conflicts; id++) {
-    const auto& entries = penalties[id];
-    uint32_t num_entries = static_cast<uint32_t>(entries.size());
-    out.write(reinterpret_cast<const char*>(&num_entries), sizeof(num_entries));
-    for (const MDD_Penalty& entry : entries) {
-      out.write(reinterpret_cast<const char*>(&entry.mdd_id), sizeof(entry.mdd_id));
-      out.write(reinterpret_cast<const char*>(&entry.penalty), sizeof(entry.penalty));
-    }
-    if (id % 256 == 0 || id + 1 == num_conflicts) print_horizon_pair_db_progress_bar(id + 1, num_conflicts);
-  }
-  std::cout << std::endl;
-}
-
-void HorizonPairDBGenerator::write_constrained_move_conflicts_section(std::ofstream& out) {
-  std::cout << "Saving constrained move conflicts..." << std::endl;
-  const uint32_t num_entries_outer = static_cast<uint32_t>(time_shifted_penalties.size());
-  out.write(reinterpret_cast<const char*>(&num_entries_outer), sizeof(num_entries_outer));
-  for (uint32_t id = 0; id < num_entries_outer; id++) {
-    const auto& entries = time_shifted_penalties[id];
-    uint32_t num_entries = static_cast<uint32_t>(entries.size());
-    out.write(reinterpret_cast<const char*>(&num_entries), sizeof(num_entries));
-    for (const MDD_Penalty& entry : entries) {
-      out.write(reinterpret_cast<const char*>(&entry.mdd_id), sizeof(entry.mdd_id));
-      out.write(reinterpret_cast<const char*>(&entry.penalty), sizeof(entry.penalty));
-    }
-    if (id % 256 == 0 || id + 1 == num_entries_outer) print_horizon_pair_db_progress_bar(id + 1, num_entries_outer);
-  }
-  std::cout << std::endl;
-}
-
-bool HorizonPairDBGenerator::save_to_file() {
-  std::filesystem::create_directories(HORIZON_PAIR_DB_ROOT_FOLDER);
-  const std::string path = HORIZON_PAIR_DB_ROOT_FOLDER + name + HORIZON_PAIR_DB_FILE_EXTENSION;
-  std::ofstream out(path, std::ios::binary | std::ios::trunc);
-  if (!out) {
-    std::cerr << "HorizonPairDBGenerator::save_to_file: failed to open " << path << " for writing" << std::endl;
-    return false;
-  }
-
-  HorizonPairDBFileHeader header{mdd_count, 0, 0, 0, 0};
-  write_header(out, header);  // placeholder, patched with real offsets below
-
-  header.offset_mdd_by_id = static_cast<uint64_t>(out.tellp());
-  write_mdd_by_id_section(out);
-
-  header.offset_mdd_id_by_v_g = static_cast<uint64_t>(out.tellp());
-  write_mdd_id_by_v_g_section(out);
-
-  header.offset_conflicts = static_cast<uint64_t>(out.tellp());
-  write_conflicts_section(out);
-
-  header.offset_constrained_move_conflicts = static_cast<uint64_t>(out.tellp());
-  write_constrained_move_conflicts_section(out);
-
-  out.seekp(0);
-  write_header(out, header);
-
-  if (!out) {
-    std::cerr << "HorizonPairDBGenerator::save_to_file: I/O error while writing " << path << std::endl;
-    return false;
-  }
-  std::cout << "Saved HorizonPairDB to " << path << std::endl;
-  return true;
-}
-
-
 bool HorizonPairDBGenerator::generate_and_save() {
   std::filesystem::create_directories(HORIZON_PAIR_DB_ROOT_FOLDER);
   const std::string path = HORIZON_PAIR_DB_ROOT_FOLDER + name + HORIZON_PAIR_DB_FILE_EXTENSION;
   std::ofstream out(path, std::ios::binary | std::ios::trunc);
   if (!out) return false;
 
-  // 1. Write dummy header to reserve space
+  // Write dummy header to reserve space
   HorizonPairDBFileHeader header{0, 0, 0, 0, 0};
-  write_header(out, header); 
+  write_header(out, header);
 
-  // 2. Generate MDDs
   generate_mdds();
   header.num_mdds = mdd_count;
 
@@ -875,30 +435,40 @@ bool HorizonPairDBGenerator::generate_and_save() {
   header.offset_mdd_id_by_v_g = static_cast<uint64_t>(out.tellp());
   write_mdd_id_by_v_g_section(out);
 
-  // 3. Generate flags and completely release mdd_by_t_s
-  flag_mdds_for_conflicts();
+  generate_all_conflicts_in_bulks();
   mdd_by_t_s.clear();
-  mdd_by_t_s.shrink_to_fit(); 
+  mdd_by_t_s.shrink_to_fit();
 
-  // 4. Generate Sync Conflicts, persist, and release
-  generate_sync_time_conflicts();
+  const std::string temp_sync_path = temp_path_prefix(name) + "_sync_conflicts.tmp";
+  const std::string temp_async_path = temp_path_prefix(name) + "_async_conflicts.tmp";
+
+  std::cout << "Merging sync conflicts..." << std::endl;
   header.offset_conflicts = static_cast<uint64_t>(out.tellp());
-  write_conflicts_section(out);
-  penalties.clear();
-  penalties.shrink_to_fit();
+  out.write(reinterpret_cast<const char*>(&mdd_count), sizeof(mdd_count));
+  {
+    std::ifstream in_sync(temp_sync_path, std::ios::binary);
+    if (!in_sync) return false;
+    out << in_sync.rdbuf();
+    out.clear();  // rdbuf insertion sets failbit if the source is empty
+  }
 
-  // 5. Generate Constrained Move Conflicts, persist, and release
-  generate_constrained_move_conflicts();
+  std::cout << "Merging async conflicts..." << std::endl;
   header.offset_constrained_move_conflicts = static_cast<uint64_t>(out.tellp());
-  write_constrained_move_conflicts_section(out);
-  time_shifted_penalties.clear();
-  time_shifted_penalties.shrink_to_fit();
+  out.write(reinterpret_cast<const char*>(&mdd_count), sizeof(mdd_count));
+  {
+    std::ifstream in_async(temp_async_path, std::ios::binary);
+    if (!in_async) return false;
+    out << in_async.rdbuf();
+    out.clear();
+  }
 
-  // 6. Finalize header offsets
   out.seekp(0);
   write_header(out, header);
+  out.close();
+
+  std::filesystem::remove(temp_sync_path);
+  std::filesystem::remove(temp_async_path);
 
   std::cout << "Saved HorizonPairDB to " << path << std::endl;
   return true;
 }
-
