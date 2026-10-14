@@ -1,0 +1,14 @@
+run_time_milliseconds,is_success,cost,num_of_iterations,num_of_explorations,seed,scen_name
+1325,true,214281,457,435,0,warehouse-10-20-10-2-1-random-1.scen
+1196,true,202786,336,336,1,warehouse-10-20-10-2-1-random-1.scen
+1441,true,202086,323,323,2,warehouse-10-20-10-2-1-random-1.scen
+1563,true,210735,377,377,3,warehouse-10-20-10-2-1-random-1.scen
+1863,true,205977,398,398,4,warehouse-10-20-10-2-1-random-1.scen
+2077,true,213351,371,371,5,warehouse-10-20-10-2-1-random-1.scen
+1997,true,197767,337,337,6,warehouse-10-20-10-2-1-random-1.scen
+2023,true,212673,361,361,7,warehouse-10-20-10-2-1-random-1.scen
+1799,true,203302,328,328,8,warehouse-10-20-10-2-1-random-1.scen
+1998,true,202228,344,344,9,warehouse-10-20-10-2-1-random-1.scen
+1966,true,200490,336,336,10,warehouse-10-20-10-2-1-random-1.scen
+1987,true,206079,345,345,11,warehouse-10-20-10-2-1-random-1.scen
+2246,true,213822,431,428,12,warehouse-10-20-10-2-1-random-1.scen
