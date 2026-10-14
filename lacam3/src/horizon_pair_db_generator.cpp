@@ -216,6 +216,13 @@ void HorizonPairDBGenerator::generate_all_conflicts_in_bulks(int bulk_size) {
   const int num_bulks = (static_cast<int>(mdd_count) + bulk_size - 1) / bulk_size;
   std::cout << "Generating conflicts in " << num_bulks << " bulks" << std::endl;
 
+  ThreadPool pool(NUM_OF_THREADS);
+  std::unordered_map<std::thread::id, int> thread_slot;
+  for (int i = 0; i < (int)pool.workers.size(); i++)
+    thread_slot[pool.workers[i].get_id()] = i;
+  std::vector<std::vector<bool>> visited_per_thread(
+      pool.workers.size(), std::vector<bool>(mdd_count, false));
+
   for (int bulk = 0; bulk < num_bulks; bulk++) {
     const int start_mdd_id = bulk * bulk_size;
     const int end_mdd_id = std::min(static_cast<int>(mdd_count), start_mdd_id + bulk_size);
@@ -224,20 +231,12 @@ void HorizonPairDBGenerator::generate_all_conflicts_in_bulks(int bulk_size) {
     std::vector<std::vector<MDD_Penalty>> bulk_sync(local_size);
     std::vector<std::vector<MDD_Penalty>> bulk_async(local_size);
 
-    ThreadPool pool(NUM_OF_THREADS);
-    std::unordered_map<std::thread::id, int> thread_slot;
-    for (int i = 0; i < (int)pool.workers.size(); i++)
-      thread_slot[pool.workers[i].get_id()] = i;
-    std::vector<std::vector<bool>> visited_per_thread(
-        pool.workers.size(), std::vector<bool>(mdd_count, false));
-
     std::atomic<uint32_t> done = 0;
 
     // Each task writes only to bulk_*[local_idx], so no locking is needed.
     auto task = [&](int mdd_id) {
       const int local_idx = mdd_id - start_mdd_id;
       std::vector<bool>& visited = visited_per_thread[thread_slot.at(std::this_thread::get_id())];
-      std::fill(visited.begin(), visited.end(), false);
 
       MDD& mdd = mdd_by_id[mdd_id];
       std::vector<uint32_t> candidates;
@@ -253,9 +252,9 @@ void HorizonPairDBGenerator::generate_all_conflicts_in_bulks(int bulk_size) {
 
           for (int k = 0; k < num_sets; k++) {
             for (uint32_t other_mdd_id : *sets[k]) {
+              if (mdd_by_id[other_mdd_id].frontiers[0][0]->id == mdd.frontiers[0][0]->id) continue;
               if (visited[other_mdd_id]) continue;
               visited[other_mdd_id] = true;
-              if (mdd_by_id[other_mdd_id].frontiers[0][0]->id == mdd.frontiers[0][0]->id) continue;
               candidates.push_back(other_mdd_id);
             }
           }
@@ -263,6 +262,10 @@ void HorizonPairDBGenerator::generate_all_conflicts_in_bulks(int bulk_size) {
       }
       std::sort(candidates.begin(), candidates.end());
       candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+
+      for (uint32_t c : candidates) {
+        visited[c] = false;
+      }
 
       for (uint32_t other_mdd_id : candidates) {
         uint8_t penalty = calculate_time_shifted_penalty(mdd, mdd_by_id[other_mdd_id]);
