@@ -179,11 +179,10 @@ int main(int argc, char *argv[])
     HorizonPairDBGenerator::HORIZON = H;
     HorizonPairDBGenerator::MDD_SIZE = H + 2;
     HorizonPairDBGenerator* db = new HorizonPairDBGenerator(ins.G, pair_db_name);
-    db->generate_mdds();
-    db->flag_mdds_for_conflicts();
-    db->generate_sync_time_conflicts();
-    db->generate_constrained_move_conflicts();
-    db->save_to_file();
+    if (!db->generate_and_save()) {
+        std::cout << "FAILED" << std::endl;
+        exit(1);
+    }
     std::cout << "db generation took " << db_deadline.elapsed_ms() / 1000.0
               << " sec" << std::endl;
     struct rusage usage;

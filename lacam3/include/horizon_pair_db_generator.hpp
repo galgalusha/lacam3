@@ -87,6 +87,8 @@ struct HorizonPairDBGenerator {
 
   void write_constrained_move_conflicts_section(std::ofstream& out);
 
+  bool generate_and_save();
+
   static void test_db_1();
   static void test_db_time_shift();
   static void test_db_time_shift_2();

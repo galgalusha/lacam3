@@ -26,11 +26,12 @@ static HorizonPairDB save_and_load_db(Graph* G, int horizon) {
   HorizonPairDBGenerator::HORIZON = horizon;
   HorizonPairDBGenerator::MDD_SIZE = horizon + 2;
   HorizonPairDBGenerator DB(G, "test");
-  DB.generate_mdds();
-  DB.flag_mdds_for_conflicts();
-  DB.generate_sync_time_conflicts();
-  DB.generate_constrained_move_conflicts();
-  DB.save_to_file();
+  // DB.generate_mdds();
+  // DB.flag_mdds_for_conflicts();
+  // DB.generate_sync_time_conflicts();
+  // DB.generate_constrained_move_conflicts();
+  // DB.save_to_file();
+  DB.generate_and_save();
   HorizonPairDBGenerator::HORIZON = orig_horizon;
   HorizonPairDBGenerator::MDD_SIZE = orig_mdd_size;
   

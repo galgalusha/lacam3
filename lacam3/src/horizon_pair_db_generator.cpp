@@ -853,3 +853,52 @@ bool HorizonPairDBGenerator::save_to_file() {
   std::cout << "Saved HorizonPairDB to " << path << std::endl;
   return true;
 }
+
+
+bool HorizonPairDBGenerator::generate_and_save() {
+  std::filesystem::create_directories(HORIZON_PAIR_DB_ROOT_FOLDER);
+  const std::string path = HORIZON_PAIR_DB_ROOT_FOLDER + name + HORIZON_PAIR_DB_FILE_EXTENSION;
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  if (!out) return false;
+
+  // 1. Write dummy header to reserve space
+  HorizonPairDBFileHeader header{0, 0, 0, 0, 0};
+  write_header(out, header); 
+
+  // 2. Generate MDDs
+  generate_mdds();
+  header.num_mdds = mdd_count;
+
+  header.offset_mdd_by_id = static_cast<uint64_t>(out.tellp());
+  write_mdd_by_id_section(out);
+
+  header.offset_mdd_id_by_v_g = static_cast<uint64_t>(out.tellp());
+  write_mdd_id_by_v_g_section(out);
+
+  // 3. Generate flags and completely release mdd_by_t_s
+  flag_mdds_for_conflicts();
+  mdd_by_t_s.clear();
+  mdd_by_t_s.shrink_to_fit(); 
+
+  // 4. Generate Sync Conflicts, persist, and release
+  generate_sync_time_conflicts();
+  header.offset_conflicts = static_cast<uint64_t>(out.tellp());
+  write_conflicts_section(out);
+  penalties.clear();
+  penalties.shrink_to_fit();
+
+  // 5. Generate Constrained Move Conflicts, persist, and release
+  generate_constrained_move_conflicts();
+  header.offset_constrained_move_conflicts = static_cast<uint64_t>(out.tellp());
+  write_constrained_move_conflicts_section(out);
+  time_shifted_penalties.clear();
+  time_shifted_penalties.shrink_to_fit();
+
+  // 6. Finalize header offsets
+  out.seekp(0);
+  write_header(out, header);
+
+  std::cout << "Saved HorizonPairDB to " << path << std::endl;
+  return true;
+}
+
