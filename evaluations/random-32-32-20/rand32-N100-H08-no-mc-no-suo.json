@@ -1,0 +1,16 @@
+{
+  "asset": "random-32-32-20",
+  "num_of_agents": 100,
+  "num_of_scenes": 20,
+  "objective": 2,
+  "seeds_per_scene": 30,
+  "pair_db": true,
+  "pair_db_horizon": 8,
+  "no_star": true,
+  "no_scatter": true,
+  "pibt_num": 1,
+  "refiner_num": 0,
+  "no_refiner": true,
+  "verbose": 1,
+  "timeout_seconds": 60
+}
