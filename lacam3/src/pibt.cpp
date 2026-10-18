@@ -236,30 +236,31 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
   // dh_values applied lazily on first detected tie in the main loop
   bool dh_filled = (pair_db == nullptr || swap_agent != NO_AGENT);
   int k_of_last_sorting = prioritized_vertex != nullptr ? 0 : -1;
+  auto& C_i_next = C_next[i];
 
   // main loop
   for (int k = 0; k < K + 1; ++k) {
     // Lazy dh values evaluation (and re-sorting)
     if (!dh_filled && k < K && k > k_of_last_sorting &&
-      D->get(i, C_next[i][k]->id) == D->get(i, C_next[i][k + 1]->id)) {
+      D->get(i, C_i_next[k]->id) == D->get(i, C_i_next[k + 1]->id)) {
       
       k_of_last_sorting = k + 1;
       while (k_of_last_sorting + 1 <= K && 
-            D->get(i, C_next[i][k]->id) == D->get(i, C_next[i][k_of_last_sorting + 1]->id)) {
+            D->get(i, C_i_next[k]->id) == D->get(i, C_i_next[k_of_last_sorting + 1]->id)) {
         k_of_last_sorting++;
       }
-      fill_dh_values(i, C_next[i], k_of_last_sorting + 1, Q_from, Q_to, k);
+      fill_dh_values(i, C_i_next, k_of_last_sorting + 1, Q_from, Q_to, k);
       
-      std::sort(C_next[i].begin() + k, C_next[i].begin() + K + 1,
+      std::sort(C_i_next.begin() + k, C_i_next.begin() + k_of_last_sorting + 1,
               [&](Vertex *const v, Vertex *const u) {
-                double hv = D->get(i, v) + dh_values[v->id];
-                double hu = D->get(i, u) + dh_values[u->id];
+                double hv = dh_values[v->id];
+                double hu = dh_values[u->id];
                 if (hv != hu) return hv < hu;
                 return tie_breakers[v->id] < tie_breakers[u->id];
               });
     }
 
-    auto u = C_next[i][k];
+    auto u = C_i_next[k];
 
     // avoid vertex conflicts
     if (occupied_next[u->id] != NO_AGENT) continue;
