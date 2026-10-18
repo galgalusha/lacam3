@@ -87,10 +87,6 @@ int main(int argc, char *argv[])
       .help("turn off iterative refinement")
       .default_value(false)
       .implicit_value(true);
-  program.add_argument("--asha")
-      .help("use ASHA Planner")
-      .default_value(false)
-      .implicit_value(true);
   program.add_argument("--refiner-num")
       .help("specify the number of refiners")
       .default_value(std::string("4"));
@@ -124,7 +120,6 @@ int main(int argc, char *argv[])
       .default_value(false)
       .implicit_value(true);
    const auto gen_pair_db = program.get<bool>("pair-db-gen");
-  const auto asha_planner = program.get<bool>("asha");
   const auto use_pair_db = program.get<bool>("pair-db");
   if ((use_pair_db || gen_pair_db) && H < 0) {
     std::cerr << "error: -H/--H <horizon> is required with --pair-db and --pair-db-gen" << std::endl;

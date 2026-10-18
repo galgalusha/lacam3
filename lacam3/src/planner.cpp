@@ -164,7 +164,6 @@ Solution Planner::solve()
       }
       continue;
     };
-    
 
     // check explored list
     auto iter = EXPLORED.find(Q_to);

@@ -4,8 +4,7 @@
 
 int HNode::COUNT = 0;
 
-HNode::HNode(Config _C, DistTable *D, HNode *_parent, int _g, int _h,
-             std::vector<bool> _modes)
+HNode::HNode(Config _C, DistTable *D, HNode *_parent, int _g, int _h)
     : C(_C),
       parent(_parent),
       neighbor(),
@@ -15,9 +14,7 @@ HNode::HNode(Config _C, DistTable *D, HNode *_parent, int _g, int _h,
       priorities(C.size(), 0),
       order(C.size(), 0),
       search_tree(std::queue<LNode *>()),
-      depth(_parent == nullptr ? 0 : _parent->depth + 1),
-      agent_modes(_modes.empty() ? std::vector<bool>(C.size(), false)
-                                 : std::move(_modes))
+      depth(_parent == nullptr ? 0 : _parent->depth + 1)
 {
   ++COUNT;
 
@@ -37,14 +34,10 @@ HNode::HNode(Config _C, DistTable *D, HNode *_parent, int _g, int _h,
   } else {
     // dynamic priorities, akin to PIBT
     for (auto i = 0; i < N; ++i) {
-      if (!is_at_goal(i, D)) {
+      if (D->get(i, C[i]) != 0) {
         priorities[i] = parent->priorities[i] + 1;
       } else {
         priorities[i] = parent->priorities[i] - (int)parent->priorities[i];
-        // if (parent != nullptr && parent->agent_modes[i] == false && agent_modes[i] == true) {
-        //   // std::cout << "Reducing priority of agent " << i << std::endl;
-        //   priorities[i] -= 100;
-        // }
       }
     }
   }
@@ -55,21 +48,12 @@ HNode::HNode(Config _C, DistTable *D, HNode *_parent, int _g, int _h,
             [&](int i, int j) { return priorities[i] > priorities[j]; });
 }
 
-void HNode::reset_tree() {
-  clear_tree();
-  search_tree.push(new LNode());
-}
-
-void HNode::clear_tree() {
+HNode::~HNode()
+{
   while (!search_tree.empty()) {
     delete search_tree.front();
     search_tree.pop();
   }
-}
-
-HNode::~HNode()
-{
-  clear_tree();
 }
 
 LNode *HNode::get_next_lowlevel_node(std::mt19937 &MT)

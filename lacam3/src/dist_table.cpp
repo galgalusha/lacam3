@@ -30,7 +30,7 @@ void DistTable::setup(const Instance *ins, bool toward_goal)
 {
   std::mutex io_mtx;  // protects the progress bar since bfs() runs on multiple threads
   std::atomic<int> done = 0;
-  print_progress_bar(0, ins->N);
+  // print_progress_bar(0, ins->N);
 
   auto bfs = [&](const int i) {
     auto g_i = toward_goal ? ins->goals[i] : ins->starts[i];
@@ -47,9 +47,9 @@ void DistTable::setup(const Instance *ins, bool toward_goal)
         Q.push(m);
       }
     }
-    const int done_now = ++done;
-    std::lock_guard lock(io_mtx);
-    print_progress_bar(done_now, ins->N);
+    // const int done_now = ++done;
+    // std::lock_guard lock(io_mtx);
+    // print_progress_bar(done_now, ins->N);
   };
 
   const int num_threads =
@@ -66,7 +66,7 @@ void DistTable::setup(const Instance *ins, bool toward_goal)
   // until the task finishes, so this explicit get() loop just makes that
   // existing wait visible rather than relying on pool's implicit destruction.
   for (auto &fut : pool) fut.get();
-  std::cout << std::endl;
+  // std::cout << std::endl;
 }
 
 DistTable::DistTable(int K) : K(K) {}
