@@ -176,7 +176,7 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
 {
   // std::cout << "[2] funcPIBT" << std::endl;
 
-  const auto K = Q_from[i]->neighbor.size();
+  const int K = Q_from[i]->neighbor.size();
 
   // exploit scatter data
   Vertex *prioritized_vertex = nullptr;
@@ -235,26 +235,28 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
 
   // dh_values applied lazily on first detected tie in the main loop
   bool dh_filled = (pair_db == nullptr || swap_agent != NO_AGENT);
+  int k_of_last_sorting = prioritized_vertex != nullptr ? 0 : -1;
 
   // main loop
-  for (size_t k = 0; k < K + 1; ++k) {
+  for (int k = 0; k < K + 1; ++k) {
     // Lazy dh values evaluation (and re-sorting)
-    if (!dh_filled && k < K && C_next[i][k] != prioritized_vertex &&
+    if (!dh_filled && k < K && k > k_of_last_sorting &&
       D->get(i, C_next[i][k]->id) == D->get(i, C_next[i][k + 1]->id)) {
       
-      fill_dh_values(i, C_next[i], K + 1, Q_from, Q_to, k);
+      k_of_last_sorting = k + 1;
+      while (k_of_last_sorting + 1 <= K && 
+            D->get(i, C_next[i][k]->id) == D->get(i, C_next[i][k_of_last_sorting + 1]->id)) {
+        k_of_last_sorting++;
+      }
+      fill_dh_values(i, C_next[i], k_of_last_sorting + 1, Q_from, Q_to, k);
       
       std::sort(C_next[i].begin() + k, C_next[i].begin() + K + 1,
               [&](Vertex *const v, Vertex *const u) {
-                if (v == prioritized_vertex) return true;
-                if (u == prioritized_vertex) return false;
                 double hv = D->get(i, v) + dh_values[v->id];
                 double hu = D->get(i, u) + dh_values[u->id];
                 if (hv != hu) return hv < hu;
                 return tie_breakers[v->id] < tie_breakers[u->id];
               });
-      
-      dh_filled = true;
     }
 
     auto u = C_next[i][k];
