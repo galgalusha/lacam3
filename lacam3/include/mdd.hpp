@@ -15,7 +15,7 @@ struct MDD {
   // frontiers.size(), so they do not necessarilly reach the goal of the agent.
   std::vector<std::vector<Vertex*>> frontiers;
 
-  void populate(DistTable* D, Vertex* v_i, Vertex* v_g, int horizon);
+  void populate(DistTable* D, Vertex* v_i, Vertex* v_g, int size, int M = 0);
 
   void render(Instance* ins);
 
@@ -55,6 +55,7 @@ struct MDD {
   static void test_joint_mdd2();
   static void test_joint_mdd_with_wait();
   static void test_joint_mdd_with_wait2();
+  static void test_mdd_with_margin();
 
 };
 

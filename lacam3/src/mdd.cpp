@@ -7,31 +7,32 @@
 #include <unordered_map>
 
 
-void MDD::populate(DistTable* D, Vertex* v_i, Vertex* v_g, int size) {
+void MDD::populate(DistTable* D, Vertex* v_i, Vertex* v_g, int size, int M) {
   frontiers.resize(size);
-
   frontiers[0].push_back(v_i);
-  int D_t_minus_1 = D->get(v_i->id, v_g->id);
+  
+  int D_0 = D->get(v_i->id, v_g->id);
 
   int t;
   for (t = 1; t < size; t++) { 
-    bool was_goal_inserted_for_this_depth = false;
     for (Vertex* v_t_minus_1 : frontiers[t - 1]) {
       for (Vertex* v_t : v_t_minus_1->neighbor) {
-        // Verify optimal progression
-        if (D->get(v_t->id, v_g->id) == D_t_minus_1 - 1) {
-          // 3. Duplicate Prevention: Since K is tiny, layer sizes are small. 
-          // A linear std::find is faster than allocating a std::unordered_set.
+        if (D->get(v_t->id, v_g->id) <= D_0 + M - t) {
           if (std::find(frontiers[t].begin(), frontiers[t].end(), v_t) == frontiers[t].end()) {
             frontiers[t].push_back(v_t);
           }
         }
       }
+      // add wait
+      if (M > 0 && D->get(v_t_minus_1->id, v_g->id) <= D_0 + M - t) {
+        if (std::find(frontiers[t].begin(), frontiers[t].end(), v_t_minus_1) == frontiers[t].end()) {
+          frontiers[t].push_back(v_t_minus_1);
+        }        
+      }
     }
-    D_t_minus_1--;
-    if (D_t_minus_1 < 0) { break; }
+    if (frontiers[t].empty()) break; 
   }
-  // goal reached before horizon: pad remaining depths with the goal vertex
+  
   for (int t_pad = t; t_pad < size; t_pad++) frontiers[t_pad].push_back(v_g);
 }
 
@@ -195,293 +196,4 @@ bool MDD::check_joint_mdd_conflict(MDD& other_mdd, Graph* G, int horizon, int dt
     }
 
     return false; 
-}
-
-
-static DistTable* create_dist_table(Graph* G) {
-  Config goals = G->V;
-  Instance* ins = new Instance(G, goals, goals, goals.size());
-  auto D = new DistTable(ins);
-  return D;
-}
-
-
-void MDD::test_joint_mdd() {
-  int HORIZON = 6;
-  int MDD_SIZE = 8;
-  std::cout << "Running test_joint_mdd" << std::endl;
-  std::vector<std::string> grid = {
-    "....",
-    "....",
-    "....",
-    "....",
-  };
-  Graph* G = new Graph(grid);
-  DistTable* D = create_dist_table(G);
-
-  auto coord = [G](int row, int col) {
-    auto index = G->width * row + col;
-    return G->U[index];
-  };
-
-  auto A_start = coord(1, 0);
-  auto A_goal  = coord(2, 3);
-
-  auto B_start = coord(0, 1);
-  auto B_goal  = coord(3, 2);
-
-  MDD mdd_A;
-  MDD mdd_B;
-
-  mdd_A.populate(D, A_start, A_goal, MDD_SIZE);
-  mdd_B.populate(D, B_start, B_goal, MDD_SIZE);
-
-  bool actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B, G, HORIZON);
-  bool expected_conflict = true;
-
-  if (actual_conflict != expected_conflict) {
-    std::cout << "Failed to detect conflict between A and B" << std::endl;
-    exit(0);
-  }
-
-  auto C_start = coord(0, 2);
-  auto C_goal  = coord(3, 2);
-
-  MDD mdd_C;
-  mdd_C.populate(D, C_start, C_goal, MDD_SIZE);
-
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_C, G, HORIZON);
-  expected_conflict = false;
-
-  if (actual_conflict != expected_conflict) {
-    std::cout << "Found non existing conflict between A and C" << std::endl;
-    exit(0);
-  }
-
-  std::cout << "All MDD tests passed" << std::endl;
-
-  delete G;
-  delete D;
-}
-
-
-void MDD::test_joint_mdd2() {
-  int HORIZON = 6;
-  int MDD_SIZE = 8;
-  std::cout << "Running test_joint_mdd2" << std::endl;
-  std::vector<std::string> grid = {
-    ".@.",
-    "...",
-    "...",
-  };
-  Graph* G = new Graph(grid);
-  DistTable* D = create_dist_table(G);
-
-  auto coord = [G](int row, int col) {
-    auto index = G->width * row + col;
-    return G->U[index];
-  };
-
-  auto A_start = coord(0, 0);
-  auto A_goal  = coord(1, 2);
-
-  auto B_start = coord(1, 0);
-  auto B_goal  = coord(0, 2);
-
-  auto C_start = coord(1, 0);
-  auto C_goal  = coord(1, 1);
-
-  auto D_start = A_goal; // swap conflict with A
-  auto D_goal  = A_start;
-
-  auto E_start = coord(1, 1);
-  auto E_goal = E_start;
-
-  MDD mdd_A;
-  MDD mdd_B;
-  MDD mdd_C;
-  MDD mdd_D;
-  MDD mdd_E;
-
-  mdd_A.populate(D, A_start, A_goal, MDD_SIZE);
-  mdd_B.populate(D, B_start, B_goal, MDD_SIZE);
-  mdd_C.populate(D, C_start, C_goal, MDD_SIZE);
-  mdd_D.populate(D, D_start, D_goal, MDD_SIZE);
-  mdd_E.populate(D, E_start, E_goal, MDD_SIZE);
-
-  bool actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B, G, HORIZON);
-  bool expected_conflict = false;
-
-  if (actual_conflict != expected_conflict) {
-    std::cout << "Detected non existing conflict between A and B" << std::endl;
-    exit(0);
-  }
-
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_C, G, HORIZON);
-  expected_conflict = true;
-
-  if (actual_conflict != expected_conflict) {
-    std::cout << "Failed to detect a conflict between A and C" << std::endl;
-    exit(0);
-  }
-
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_D, G, HORIZON);
-  expected_conflict = true;
-
-  if (actual_conflict != expected_conflict) {
-    std::cout << "Failed to detect a conflict between A and D" << std::endl;
-    exit(0);
-  }
-
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_E, G, HORIZON);
-  expected_conflict = true;
-
-  if (actual_conflict != expected_conflict) {
-    std::cout << "Failed to detect a conflict between A and E" << std::endl;
-    exit(0);
-  }
-
-  std::cout << "All MDD tests passed" << std::endl;
-
-  delete G;
-  delete D;
-}
-
-void MDD::test_joint_mdd_with_wait() {
-  int HORIZON = 6;
-  int MDD_SIZE = 8;
-  std::cout << "Running test_joint_mdd_with_wait" << std::endl;
-  std::vector<std::string> grid = {
-    "....",
-    "....",
-    "....",
-    "....",
-  };
-  Graph* G = new Graph(grid);
-  DistTable* D = create_dist_table(G);
-
-  auto coord = [G](int row, int col) {
-    auto index = G->width * row + col;
-    return G->U[index];
-  };
-
-  auto A_start = coord(1, 0);
-  auto A_goal  = coord(2, 3);
-
-  auto B_start = coord(0, 1);
-  auto B_goal  = coord(3, 2);
-
-  MDD mdd_A;
-  MDD mdd_B;
-
-  mdd_A.populate(D, A_start, A_goal, MDD_SIZE);
-  mdd_B.populate(D, B_start, B_goal, MDD_SIZE);
-
-  bool actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B, G, HORIZON);
-  bool expected_conflict = true;
-
-  if (actual_conflict != expected_conflict) {
-    std::cout << "Failed to detect conflict between A and B" << std::endl;
-    exit(0);
-  }
-
-  auto B_next = coord(1, 1);
-
-  MDD mdd_B_next;
-  mdd_B_next.populate(D, B_next, B_goal, MDD_SIZE);
-
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B_next, G, HORIZON, 1, 0);
-  expected_conflict = true;
-
-  if (actual_conflict != expected_conflict) {
-    std::cout << "Failed to detect conflict between A and B_next" << std::endl;
-    exit(0);
-  }
-
-  std::cout << "All MDD tests passed" << std::endl;
-
-  delete G;
-  delete D;
-}
-
-void MDD::test_joint_mdd_with_wait2() {
-  int HORIZON = 6;
-  int MDD_SIZE = 8;
-  std::cout << "Running test_joint_mdd_with_wait2" << std::endl;
-  std::vector<std::string> grid = {
-    ".@.",
-    "...",
-    "...",
-  };
-  Graph* G = new Graph(grid);
-  DistTable* D = create_dist_table(G);
-
-  auto coord = [G](int row, int col) {
-    auto index = G->width * row + col;
-    return G->U[index];
-  };
-
-  auto A_start = coord(0, 0);
-  auto A_goal  = coord(1, 2);
-
-  auto B_start = coord(1, 0);
-  auto B_goal  = coord(0, 2);
-
-  auto C_start = coord(1, 0);
-  auto C_goal  = coord(1, 1);
-
-  auto D_start = A_goal; // swap conflict with A
-  auto D_goal  = A_start;
-
-  auto E_start = coord(1, 1);
-  auto E_goal = E_start;
-
-  MDD mdd_A;
-  MDD mdd_B;
-  MDD mdd_C;
-  MDD mdd_D;
-  MDD mdd_E;
-
-  mdd_A.populate(D, A_start, A_goal, MDD_SIZE);
-  mdd_B.populate(D, B_start, B_goal, MDD_SIZE); mdd_B = mdd_B.get_mdd_with_wait();
-  mdd_C.populate(D, C_start, C_goal, MDD_SIZE); mdd_C = mdd_C.get_mdd_with_wait();
-  mdd_D.populate(D, D_start, D_goal, MDD_SIZE); mdd_D = mdd_D.get_mdd_with_wait();
-  mdd_E.populate(D, E_start, E_goal, MDD_SIZE); mdd_E = mdd_E.get_mdd_with_wait();
-
-  bool actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_B, G, HORIZON);
-  bool expected_conflict = true;
-
-  if (actual_conflict != expected_conflict) {
-    std::cout << "Failed to detect conflict between A and B" << std::endl;
-    exit(0);
-  }
-
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_C, G, HORIZON);
-  expected_conflict = true;
-
-  if (actual_conflict != expected_conflict) {
-    std::cout << "Failed to detect a conflict between A and C" << std::endl;
-    exit(0);
-  }
-
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_D, G, HORIZON);
-  expected_conflict = true;
-
-  if (actual_conflict != expected_conflict) {
-    std::cout << "Failed to detect a conflict between A and D" << std::endl;
-    exit(0);
-  }
-
-  actual_conflict = mdd_A.check_joint_mdd_conflict(mdd_E, G, HORIZON);
-  expected_conflict = true;
-
-  if (actual_conflict != expected_conflict) {
-    std::cout << "Failed to detect a conflict between A and E" << std::endl;
-    exit(0);
-  }
-
-  std::cout << "All MDD tests passed" << std::endl;
-
-  delete G;
-  delete D;
 }
