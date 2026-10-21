@@ -10,7 +10,7 @@
 //   FileHeader | mdd_by_id section | mdd_id_by_v_g section | conflicts section | constrained_move_conflicts section
 
 inline const std::string HORIZON_PAIR_DB_ROOT_FOLDER = "./mapf_db/";
-inline const std::string HORIZON_PAIR_DB_FILE_EXTENSION = ".mdd_db";
+inline const std::string HORIZON_PAIR_DB_FILE_EXTENSION = ".mdd_db3";
 
 // Terminates the per-frontier vertex list of a serialized MDD (see
 // write_mdd/read_mdd in the generator/runtime classes).
@@ -22,7 +22,6 @@ struct HorizonPairDBFileHeader {
   uint64_t offset_mdd_by_id;
   uint64_t offset_mdd_id_by_v_g;
   uint64_t offset_conflicts;
-  uint64_t offset_constrained_move_conflicts;
 };
 
 inline void print_horizon_pair_db_progress_bar(size_t done, size_t total) {

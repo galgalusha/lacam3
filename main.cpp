@@ -24,6 +24,9 @@ int main(int argc, char *argv[])
   program.add_argument("-H", "--H")
       .help("horizon for the pair db (required with --pair-db / --pair-db-gen)")
       .default_value(std::string("-1"));
+  program.add_argument("-M", "--M")
+      .help("Margin for the pair db (required with --pair-db / --pair-db-gen)")
+      .default_value(std::string("-1"));
   program.add_argument("-N", "--num").help("number of agents").required();
   program.add_argument("-s", "--seed")
       .help("seed")
@@ -116,6 +119,7 @@ int main(int argc, char *argv[])
   const auto seed = std::stoi(program.get<std::string>("seed"));
   const auto map_name = program.get<std::string>("map");
   const auto H = std::stoi(program.get<std::string>("H"));
+  const auto M = std::stoi(program.get<std::string>("M"));
   program.add_argument("-l", "--log_short")
       .default_value(false)
       .implicit_value(true);
@@ -125,8 +129,12 @@ int main(int argc, char *argv[])
     std::cerr << "error: -H/--H <horizon> is required with --pair-db and --pair-db-gen" << std::endl;
     return 1;
   }
+  if ((use_pair_db || gen_pair_db) && M < 0) {
+    std::cerr << "error: -M/--M <horizon> is required with --pair-db and --pair-db-gen" << std::endl;
+    return 1;
+  }  
   const auto pair_db_name = (use_pair_db || gen_pair_db)
-      ? "H_" + std::to_string(H) + "_" + std::filesystem::path(map_name).stem().string()
+      ? "H_" + std::to_string(H) + "_M_" + std::to_string(M) + "_" + std::filesystem::path(map_name).stem().string()
       : std::filesystem::path(map_name).stem().string();
   if (use_pair_db && (map_name.size() < 4 || map_name.substr(map_name.size() - 4) != ".map")) {
     std::cerr << "error: map file must have a .map extension to use --pair-db" << std::endl;
@@ -194,9 +202,9 @@ int main(int argc, char *argv[])
 //   HorizonPairDBGenerator::test_db_1();
 //   HorizonPairDBGenerator::test_db_time_shift();
 //   HorizonPairDBGenerator::test_db_time_shift_2();
-//   HorizonPairDB::integration_test1();
+  HorizonPairDB::integration_test1();
 
-  MDD::test_mdd_with_margin();
+//  MDD::test_mdd_with_margin();
   exit(0);
   
 

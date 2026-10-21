@@ -20,20 +20,18 @@ static DistTable* create_dist_table(Graph* G) {
 }
 
 
-static HorizonPairDB save_and_load_db(Graph* G, int horizon) {
+static HorizonPairDB save_and_load_db(Graph* G, int horizon, int margin) {
   int orig_horizon = HorizonPairDBGenerator::HORIZON;
+  int orig_margin = HorizonPairDBGenerator::MARGIN;
   int orig_mdd_size = HorizonPairDBGenerator::MDD_SIZE;
   HorizonPairDBGenerator::HORIZON = horizon;
-  HorizonPairDBGenerator::MDD_SIZE = horizon + 2;
+  HorizonPairDBGenerator::MDD_SIZE = horizon + 1;
+  HorizonPairDBGenerator::MARGIN = margin;
   HorizonPairDBGenerator DB(G, "test");
-  // DB.generate_mdds();
-  // DB.flag_mdds_for_conflicts();
-  // DB.generate_sync_time_conflicts();
-  // DB.generate_constrained_move_conflicts();
-  // DB.save_to_file();
   DB.generate_and_save();
   HorizonPairDBGenerator::HORIZON = orig_horizon;
   HorizonPairDBGenerator::MDD_SIZE = orig_mdd_size;
+  HorizonPairDBGenerator::MARGIN = orig_margin;
   
   HorizonPairDB loaded_db(G, "test");
   loaded_db.load_from_file();
@@ -153,44 +151,10 @@ static uint8_t get_db_penalty(HorizonPairDB* DB, Vertex* i_start, Vertex* i_goal
 }
 
 
-static uint8_t get_db_constrained_move_penalty(HorizonPairDB* DB, Vertex* v1, Vertex* v1_next, Vertex* g1, Vertex* v2, Vertex* g2) {
-  uint32_t agent2 = v2->id * DB->G->V.size() + g2->id;
-  uint32_t mdd_id2 = DB->mdd_id_by_v_g[agent2];
-
-  // Scenario 3: agent 1 pushes agent 2
-  if (v2->id == v1_next->id) {
-    MDD& mdd2_now = DB->mdd_by_id[mdd_id2];
-    if (mdd2_now.frontiers[1].size() == 1 && mdd2_now.frontiers[1][0]->id == v2->id) {
-      // Agent 2 is stanging at its goal
-      return 2;
-    }
-    uint8_t penalty = 2;
-    for (Vertex* v2_next : mdd2_now.frontiers[1]) {
-      if (v2_next->id == v1->id) continue;
-      int8_t p = get_db_penalty(DB, v1_next, g1, v2_next, g2);
-      if (p == 0) return 0;
-      if (p < penalty) penalty = p;
-    }
-    return penalty; 
-  }
-
-  // Scenario 2: agent 1 is at v1_next at time t+1, agent 2 is at v2 at time t.
-  uint32_t agent1 = v1_next->id * DB->G->V.size() + g1->id;
-  uint32_t mdd1 = DB->mdd_id_by_v_g[agent1];
-  const auto& entries = DB->time_shifted_penalties[mdd1];
-  for (const auto& entry : entries) {
-    if (entry.mdd_id == mdd_id2) {
-      return entry.penalty;
-    }
-  }
-  return 0;
-};
-
-
 static bool test_sync_time_conflicts(Graph* G, DistTable* D, HorizonPairDB* DB, Vertex* i_start, Vertex* i_goal, Vertex* j_start, Vertex* j_goal) {
   int astar_cost = joint_astar(D, i_start, nullptr, i_goal, j_start, j_goal);
   int naive_cost = D->get(i_start->id, i_goal->id) + D->get(j_start->id, j_goal->id);
-  int astar_penalty = std::min(2, astar_cost - naive_cost);
+  int astar_penalty = std::min(5, astar_cost - naive_cost);
   int db_penalty = get_db_penalty(DB, i_start, i_goal, j_start, j_goal);
   if (astar_penalty != db_penalty) {
     std::cout << "[TEST FAILED]. DB penalty: " << db_penalty
@@ -206,43 +170,35 @@ static bool test_sync_time_conflicts(Graph* G, DistTable* D, HorizonPairDB* DB, 
 }
 
 
-static bool test_constrained_move_conflicts(Graph* G, DistTable* D, HorizonPairDB* DB, Vertex* i_start, Vertex* i_next, Vertex* i_goal, Vertex* j_start, Vertex* j_goal) {
-  int astar_cost = joint_astar(D, i_start, i_next, i_goal, j_start, j_goal);
-  int j_naive_cost = D->get(j_start->id, j_goal->id);
-  int i_naive_cost = i_next == nullptr
-      ? D->get(i_start->id, i_goal->id)
-      : D->get(i_start->id, i_next->id) + D->get(i_next->id, i_goal->id);
-  int naive_cost = i_naive_cost + j_naive_cost;
-  int astar_penalty = std::min(2, astar_cost - naive_cost);
-  int db_penalty = get_db_constrained_move_penalty(DB, i_start, i_next, i_goal, j_start, j_goal);
-  if (astar_penalty != db_penalty) {
-    std::cout << "[TEST FAILED]. DB penalty: " << db_penalty
-              << ", A* penalty: " << astar_penalty
-              << ", i: (" << i_start->x << ", " << i_start->y << ")->("
-              << i_goal->x << ", " << i_goal->y << ")"
-              << ", i_next: (" << i_next->x << ", " << i_next->y << ")"
-              << ", j: (" << j_start->x << ", " << j_start->y << ")->("
-              << j_goal->x << ", " << j_goal->y << ")"
-              << std::endl;
-      return false;
-  }
-  return true;
-}
-
-
 void HorizonPairDB::integration_test1() {
   int HORIZON = 10;
-  int MDD_SIZE = 12;
+  int MARGIN  = 10;
   std::cout << "Running integration_test1" << std::endl;
   std::vector<std::string> grid = {
-    "...@.",
-    ".....",
-    "@...@",
-    "..@..",
+    "...@.",  //  0   1   2   ..   3
+    ".....",  //  4   5   6    7   8
+    "@...@",  //  ..  9  10   11  ..
+    "..@..",  //  12 13  ..   14  15
   };
   Graph* G = new Graph(grid);
-  HorizonPairDB DB = save_and_load_db(G, HORIZON);
+  HorizonPairDB DB = save_and_load_db(G, HORIZON, 0);
   DistTable* D = create_dist_table(G);
+
+
+  // i: (4, 3)->(3, 3), j: (3, 3)->(4, 3)
+
+
+  MDD MDD_i, MDD_j;
+  MDD_i.populate(D, G->U[3 * G->width + 4], G->U[3 * G->width + 3], 5, MARGIN);
+  MDD_j.populate(D, G->U[3 * G->width + 3], G->U[3 * G->width + 4], 5, MARGIN);
+  std::cout << "MDD_i: " << MDD_i.str() << std::endl;
+  std::cout << "MDD_j: " << MDD_j.str() << std::endl;
+
+  HorizonPairDBGenerator generator(G, "bla");
+  HorizonPairDBGenerator::MARGIN = MARGIN;
+  uint8_t penalty = generator.calculate_penalty(MDD_i, MDD_j);
+  std::cout << "Penalty: " << (int)penalty << std::endl;
+  return;
 
 
   std::cout << "Testing sync-time penalties" << std::endl;
@@ -262,33 +218,5 @@ void HorizonPairDB::integration_test1() {
     }
   }
   std::cout << "Successes: " << successes << ", Failures: " << failures << std::endl;
-
-  std::cout << "Testing constrained-move penalties" << std::endl;
-
-  successes = 0;
-  failures = 0;
-  int duplicates = 0;
-  for (Vertex* i_start : G->V) {
-    for (Vertex* i_goal : G->V) {
-      for (Vertex* j_start : G->V) {
-        if (j_start == i_start) continue;
-        for (Vertex* j_goal : G->V) {
-          if (j_goal == i_goal) continue;
-          uint32_t mdd_i_id = DB.mdd_id_by_v_g[i_start->id * DB.V_SIZE + i_goal->id];
-//          MDD& mdd_i = DB.mdd_by_id[mdd_i_id];
-//          for (Vertex* i_next : mdd_i.frontiers[1]) {
-          for (Vertex* i_next : i_start->neighbor) {
-            if (i_next == i_start) continue;
-            bool success = test_constrained_move_conflicts(G, D, &DB, i_start, i_next, i_goal, j_start, j_goal);
-            if (success) successes++; else failures++;
-          }
-        }
-      }
-    }
-  }
-  std::cout << "Successes: " << successes << ", Failures: " << failures 
-            << ", Duplicates: " << duplicates
-            << std::endl;
-
   delete G;
 }

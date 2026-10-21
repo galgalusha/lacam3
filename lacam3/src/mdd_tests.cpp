@@ -291,63 +291,40 @@ void MDD::test_joint_mdd_with_wait2() {
 void MDD::test_mdd_with_margin() {
   std::cout << "Running test_mdd_with_margin" << std::endl;
   std::vector<std::string> grid = {
-    ".....", // A B C D E
-    ".....", // F G H I J
-    ".....", // K L M N O
-    ".....", // P Q R S T
-    ".....", // U V W X Y
+    ".....", // A B C D E  //   0   1   2   3   4
+    ".....", // F G H I J  //   5   6   7   8   9
+    ".....", // K L M N O  //  10  11  12  13  14
+    ".....", // P Q R S T  //  15  16  17  18  19
+    ".....", // U V W X Y  //  20  21  22  23  24
   };
 
   Graph* G = new Graph(grid);
   DistTable* D = create_dist_table(G);
 
-  auto coord = [G](int row, int col) {
-    auto index = G->width * row + col;
-    return G->U[index];
-  };
-
-  // Map each cell's letter (per the grid comment above) to its Vertex, and
-  // back again from a vertex id to its letter, e.g. V['A'] -> coord(0, 0).
-  std::unordered_map<char, Vertex*> V;
-  std::unordered_map<int, char> L;
-  char letter = 'A';
-  for (int row = 0; row < (int)grid.size(); ++row) {
-    for (int col = 0; col < (int)grid[row].size(); ++col) {
-      Vertex* v = coord(row, col);
-      V[letter] = v;
-      L[v->id] = letter;
-      ++letter;
-    }
-  }
-
   MDD mdd;
   int horizon = 3;
   int margin = 2;
-  mdd.populate(D, V['S'], V['G'], horizon + 1, margin);
-
-
-
-  MDD expected_mdd;
-  expected_mdd.frontiers.resize(4);
-  expected_mdd.frontiers[0] = { V['S'] };
-  expected_mdd.frontiers[1] = { V['R'], V['T'], V['N'], V['X'], V['S'] };
-  expected_mdd.frontiers[2] = { V['Q'], V['S'], V['M'], V['W'], V['R'], V['O'], V['I'], V['N'] };
-  expected_mdd.frontiers[3] = { V['P'], V['R'], V['L'], V['V'], V['Q'], V['N'], V['H'], V['M'], V['J'], V['D'], V['I'] };
+  mdd.populate(D, G->V[18], G->V[6], horizon + 1, margin);
 
   std::string actual_str = mdd.str();
-  std::string expected_str = expected_mdd.str();
+  std::string expected_str = "{ 0: [18], 1: [17, 19, 13, 23, 18], 2: [16, 18, 12, 22, 17, 14, 8, 13], 3: [15, 17, 11, 21, 16, 13, 7, 12, 9, 3, 8] }";
   if (actual_str != expected_str) {
     std::cout << "Expected MDD: " << expected_str << std::endl;
     std::cout << "Actual MDD  : " << actual_str << std::endl;
     exit(0);
   }
 
-  // for (int t = 0; t < mdd.frontiers.size(); t++) {
-  //   for (Vertex* v : mdd.frontiers[t]) {
-  //     std::cout << " " << L[v->id];
-  //   }
-  //   std::cout << std::endl;
-  // }
+  mdd.frontiers.clear();
+  mdd.populate(D, G->V[18], G->V[5], horizon + 1, margin);
+
+  actual_str = mdd.str();
+  expected_str = "{ 0: [18], 1: [17, 19, 13, 23, 18], 2: [16, 18, 12, 22, 17, 14, 8, 13], 3: [15, 17, 11, 21, 16, 13, 7, 12, 9, 3, 8] }";
+  if (actual_str != expected_str) {
+    std::cout << "Expected MDD: " << expected_str << std::endl;
+    std::cout << "Actual MDD  : " << actual_str << std::endl;
+    exit(0);
+  }
+
   delete G;
   delete D;
 }

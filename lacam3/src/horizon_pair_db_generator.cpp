@@ -2,6 +2,7 @@
 #include "../include/thread_pool.hpp"
 #include "../include/drawing.hpp"
 #include "../include/moves.hpp"
+#include "../include/concat_view.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -19,15 +20,16 @@
 
 
 // Number of steps ahead we are aware of
-int HorizonPairDBGenerator::HORIZON = 7;
+int HorizonPairDBGenerator::HORIZON = 3;
+
+// Max detour MDD allows beyond optimal paths
+int HorizonPairDBGenerator::MARGIN = 1;
+
 static const int NUM_OF_THREADS = 12;
 
 // MDD::frontiers[0] is the start vertex (time 0).
 // This is why we add 1 to HORIZON.
-// Given two MDDs aligned to the same time, we look up to frontiers[HORIZON + 1].
-// When comparing time shifted MDDs, the shifted one needs to look forward an extra step.
-// Thats why we add another 1.
-int HorizonPairDBGenerator::MDD_SIZE = HorizonPairDBGenerator::HORIZON + 2;
+int HorizonPairDBGenerator::MDD_SIZE = HorizonPairDBGenerator::HORIZON + 1;
 
 
 // Runs a dedicated thread that redraws the progress bar at a fixed rate while
@@ -104,7 +106,7 @@ void HorizonPairDBGenerator::generate_mdds() {
       int agent_id = v_i * (int)V_SIZE + g_i;
       
       MDD mdd; 
-      mdd.populate(D, G->V[v_i], G->V[g_i], MDD_SIZE);
+      mdd.populate(D, G->V[v_i], G->V[g_i], MDD_SIZE, MARGIN);
       
       uint32_t mdd_id;
       bool is_new_mdd = false;
@@ -131,8 +133,8 @@ void HorizonPairDBGenerator::generate_mdds() {
         // Protect mdd_by_t_s because different v_i threads might hit the same space-time vertex
         std::lock_guard lock(mdd_mtx2);
         for (int t = 0; t < (int)mdd.frontiers.size(); t++) {
-          for (Vertex* v : mdd.frontiers[t]) {
-            int idx = t * (int)V_SIZE + v->id;
+          for (MDD::Entry& entry: mdd.frontiers[t]) {
+            int idx = t * (int)V_SIZE + entry.v->id;
             mdd_by_t_s[idx].push_back(mdd_id); 
           }
         }
@@ -164,31 +166,6 @@ void HorizonPairDBGenerator::generate_mdds() {
 }
 
 
-uint8_t HorizonPairDBGenerator::calculate_sync_time_penalty(MDD& mdd1, MDD& mdd2) {
-  if (!mdd1.check_joint_mdd_conflict(mdd2, G, HORIZON))
-    return 0;
-  if (!mdd1.check_joint_mdd_conflict(mdd2, G, HORIZON, 1, 0))
-    return 1;
-  if (!mdd1.check_joint_mdd_conflict(mdd2, G, HORIZON, 0, 1))
-    return 1;
-  return 2;
-}
-
-
-uint8_t HorizonPairDBGenerator::calculate_time_shifted_penalty(MDD& mdd_next, MDD& mdd_now) {
-  const static int DT_NEXT = 0;
-  const static int DT_NOW  = 1;
-  if (!mdd_next.check_joint_mdd_conflict(mdd_now, G, HORIZON, DT_NEXT, DT_NOW))
-    return 0;
-  if (!mdd_next.check_joint_mdd_conflict(mdd_now, G, HORIZON, DT_NEXT, DT_NOW - 1))
-    return 1;
-  MDD mdd_next_delayed = mdd_next.get_mdd_with_wait();
-  if (!mdd_next_delayed.check_joint_mdd_conflict(mdd_now, G, HORIZON, DT_NEXT, DT_NOW))
-    return 1;
-  return 2;
-}
-
-
 static std::string temp_path_prefix(const std::string& name) {
   return HORIZON_PAIR_DB_ROOT_FOLDER + name;
 }
@@ -208,10 +185,8 @@ static void write_bulk_section(std::ofstream& out, const std::vector<std::vector
 void HorizonPairDBGenerator::generate_all_conflicts_in_bulks(int bulk_size) {
   std::filesystem::create_directories(HORIZON_PAIR_DB_ROOT_FOLDER);
   const std::string temp_sync_path = temp_path_prefix(name) + "_sync_conflicts.tmp";
-  const std::string temp_async_path = temp_path_prefix(name) + "_async_conflicts.tmp";
   std::ofstream out_sync(temp_sync_path, std::ios::binary | std::ios::trunc);
-  std::ofstream out_async(temp_async_path, std::ios::binary | std::ios::trunc);
-  if (!out_sync || !out_async) throw std::runtime_error("Failed to open temporary conflict files");
+  if (!out_sync) throw std::runtime_error("Failed to open temporary conflict files");
 
   const int num_bulks = (static_cast<int>(mdd_count) + bulk_size - 1) / bulk_size;
   std::cout << "Generating conflicts in " << num_bulks << " bulks" << std::endl;
@@ -229,8 +204,6 @@ void HorizonPairDBGenerator::generate_all_conflicts_in_bulks(int bulk_size) {
     const int local_size = end_mdd_id - start_mdd_id;
 
     std::vector<std::vector<MDD_Penalty>> bulk_sync(local_size);
-    std::vector<std::vector<MDD_Penalty>> bulk_async(local_size);
-
     std::atomic<uint32_t> done = 0;
 
     // Each task writes only to bulk_*[local_idx], so no locking is needed.
@@ -241,18 +214,18 @@ void HorizonPairDBGenerator::generate_all_conflicts_in_bulks(int bulk_size) {
       MDD& mdd = mdd_by_id[mdd_id];
       std::vector<uint32_t> candidates;
       for (int t = 0; t < MDD_SIZE; t++) {
-        for (Vertex* v : mdd.frontiers[t]) {
+        for (MDD::Entry& entry : mdd.frontiers[t]) {
           std::vector<uint32_t>* sets[3];
           int num_sets = 0;
-          sets[num_sets++] = &mdd_by_t_s[static_cast<size_t>(t) * G->V.size() + v->id];
+          sets[num_sets++] = &mdd_by_t_s[static_cast<size_t>(t) * G->V.size() + entry.v->id];
           if (t < MDD_SIZE - 1)
-            sets[num_sets++] = &mdd_by_t_s[static_cast<size_t>(t + 1) * G->V.size() + v->id];
+            sets[num_sets++] = &mdd_by_t_s[static_cast<size_t>(t + 1) * G->V.size() + entry.v->id];
           if (t > 0)
-            sets[num_sets++] = &mdd_by_t_s[static_cast<size_t>(t - 1) * G->V.size() + v->id];
+            sets[num_sets++] = &mdd_by_t_s[static_cast<size_t>(t - 1) * G->V.size() + entry.v->id];
 
           for (int k = 0; k < num_sets; k++) {
             for (uint32_t other_mdd_id : *sets[k]) {
-              if (mdd_by_id[other_mdd_id].frontiers[0][0]->id == mdd.frontiers[0][0]->id) continue;
+              if (mdd_by_id[other_mdd_id].frontiers[0][0].v->id == mdd.frontiers[0][0].v->id) continue;
               if (visited[other_mdd_id]) continue;
               visited[other_mdd_id] = true;
               candidates.push_back(other_mdd_id);
@@ -268,12 +241,8 @@ void HorizonPairDBGenerator::generate_all_conflicts_in_bulks(int bulk_size) {
       }
 
       for (uint32_t other_mdd_id : candidates) {
-        uint8_t penalty = calculate_time_shifted_penalty(mdd, mdd_by_id[other_mdd_id]);
-        if (penalty > 0) bulk_async[local_idx].push_back({other_mdd_id, penalty});
-      }
-      for (uint32_t other_mdd_id : candidates) {
         if ((uint32_t)mdd_id >= other_mdd_id) continue;
-        uint8_t penalty = calculate_sync_time_penalty(mdd, mdd_by_id[other_mdd_id]);
+        uint8_t penalty = calculate_penalty(mdd, mdd_by_id[other_mdd_id]);
         if (penalty > 0) bulk_sync[local_idx].push_back({other_mdd_id, penalty});
       }
       ++done;
@@ -289,10 +258,8 @@ void HorizonPairDBGenerator::generate_all_conflicts_in_bulks(int bulk_size) {
     std::cout << std::endl;
 
     write_bulk_section(out_sync, bulk_sync, local_size);
-    write_bulk_section(out_async, bulk_async, local_size);
   }
 }
-
 
 
 // TODO: this logic only works for grid graphs and won't work for general graphs.
@@ -301,76 +268,6 @@ inline bool check_is_accessible(Vertex* from, Vertex* to) {
   int dy = std::abs(from->y - to->y);
   return (dx + dy < 2);
 }
-
-
-MDD create_constrained_move_MDD(MDD& mdd1, Vertex* next_v1) {
-  MDD new_mdd;
-  new_mdd.frontiers.resize(mdd1.frontiers.size());
-  new_mdd.frontiers[0] = mdd1.frontiers[0];
-  new_mdd.frontiers[1] = { next_v1 };
-  for (auto t = 2; t < new_mdd.frontiers.size(); t++) {
-    for (Vertex* mdd1_v : mdd1.frontiers[t]) {
-      // Find whether mdd1_v is accessible
-      bool is_accessible = false;
-      for (Vertex* v_constrained_parent : new_mdd.frontiers[t - 1]) {
-        if (check_is_accessible(v_constrained_parent, mdd1_v)) { is_accessible = true; break; }
-      }
-      if (is_accessible) new_mdd.frontiers[t].push_back(mdd1_v);
-    }
-  }
-  return new_mdd;
-}
-
-
-void HorizonPairDBGenerator::interactive_mdd_test() {
-  using namespace drawing_detail;
-  const int W = G->width;
-  const int H = G->height;
-
-  while (true) {
-    std::cout << "Enter v_i (start vertex id, 0-" << G->V.size() - 1 << "): ";
-    int v_i;
-    if (!(std::cin >> v_i)) break;
-
-    std::cout << "Enter g_i (goal vertex id, 0-" << G->V.size() - 1 << "): ";
-    int g_i;
-    if (!(std::cin >> g_i)) break;
-
-    if (v_i < 0 || v_i >= (int)G->V.size() || g_i < 0 || g_i >= (int)G->V.size()) {
-      std::cout << "Invalid vertex id(s), must be within [0, " << G->V.size() - 1 << "]\n";
-      continue;
-    }
-
-    MDD mdd;
-    mdd.populate(D, G->V[v_i], G->V[g_i], HORIZON);
-
-    const int goal_index = G->V[g_i]->index;
-
-    std::unordered_map<int, int> depth_of_index;
-    for (size_t depth = 0; depth < mdd.frontiers.size(); depth++)
-      for (Vertex* v : mdd.frontiers[depth])
-        depth_of_index.emplace(v->index, (int)depth);  // keep earliest depth
-
-    for (int y = 0; y < H; y++) {
-      for (int x = 0; x < W; x++) {
-        int idx = W * y + x;
-        auto it = depth_of_index.find(idx);
-        if (idx == goal_index) {
-          std::cout << GREEN << 'G' << RESET;
-        } else if (it != depth_of_index.end()) {
-          const char* color = (it->second == 0) ? GREEN : RED;
-          std::cout << color << (char)('0' + it->second % 10) << RESET;
-        } else {
-          std::cout << (G->U[idx] ? '.' : '#');
-        }
-      }
-      std::cout << '\n';
-    }
-
-    std::cout << mdd.str() << '\n';
-  }
-}
-
 
 
 // ---------------------------------------------------------------------------
@@ -382,32 +279,10 @@ void HorizonPairDBGenerator::write_header(std::ofstream& out, const HorizonPairD
   out.write(reinterpret_cast<const char*>(&header.offset_mdd_by_id), sizeof(header.offset_mdd_by_id));
   out.write(reinterpret_cast<const char*>(&header.offset_mdd_id_by_v_g), sizeof(header.offset_mdd_id_by_v_g));
   out.write(reinterpret_cast<const char*>(&header.offset_conflicts), sizeof(header.offset_conflicts));
-  out.write(reinterpret_cast<const char*>(&header.offset_constrained_move_conflicts), sizeof(header.offset_constrained_move_conflicts));
-}
-
-// Frontier vertices are stored as v->id (index into G->V), not v->index.
-void HorizonPairDBGenerator::write_mdd(std::ofstream& out, const MDD& mdd) {
-  uint8_t num_frontiers = static_cast<uint8_t>(mdd.frontiers.size());
-  out.write(reinterpret_cast<const char*>(&num_frontiers), sizeof(num_frontiers));
-  for (const auto& frontier : mdd.frontiers) {
-    uint8_t num_vertices = static_cast<uint8_t>(frontier.size());
-    out.write(reinterpret_cast<const char*>(&num_vertices), sizeof(num_vertices));
-    for (Vertex* v : frontier) {
-      uint16_t vid = static_cast<uint16_t>(v->id);
-      out.write(reinterpret_cast<const char*>(&vid), sizeof(vid));
-    }
-  }
-  const uint8_t sentinel = HORIZON_PAIR_DB_MDD_SENTINEL;
-  out.write(reinterpret_cast<const char*>(&sentinel), sizeof(sentinel));
 }
 
 void HorizonPairDBGenerator::write_mdd_by_id_section(std::ofstream& out) {
   std::cout << "Saving MDDs..." << std::endl;
-  for (uint32_t id = 0; id < mdd_count; id++) {
-    write_mdd(out, mdd_by_id[id]);
-    if (id % 256 == 0 || id + 1 == mdd_count) print_horizon_pair_db_progress_bar(id + 1, mdd_count);
-  }
-  std::cout << std::endl;
   out.write(reinterpret_cast<const char*>(&mdd_count), sizeof(mdd_count));
 }
 
@@ -426,7 +301,7 @@ bool HorizonPairDBGenerator::generate_and_save() {
   if (!out) return false;
 
   // Write dummy header to reserve space
-  HorizonPairDBFileHeader header{0, 0, 0, 0, 0};
+  HorizonPairDBFileHeader header{0, 0, 0, 0};
   write_header(out, header);
 
   generate_mdds();
@@ -443,7 +318,6 @@ bool HorizonPairDBGenerator::generate_and_save() {
   mdd_by_t_s.shrink_to_fit();
 
   const std::string temp_sync_path = temp_path_prefix(name) + "_sync_conflicts.tmp";
-  const std::string temp_async_path = temp_path_prefix(name) + "_async_conflicts.tmp";
 
   std::cout << "Merging sync conflicts..." << std::endl;
   header.offset_conflicts = static_cast<uint64_t>(out.tellp());
@@ -455,23 +329,93 @@ bool HorizonPairDBGenerator::generate_and_save() {
     out.clear();  // rdbuf insertion sets failbit if the source is empty
   }
 
-  std::cout << "Merging async conflicts..." << std::endl;
-  header.offset_constrained_move_conflicts = static_cast<uint64_t>(out.tellp());
-  out.write(reinterpret_cast<const char*>(&mdd_count), sizeof(mdd_count));
-  {
-    std::ifstream in_async(temp_async_path, std::ios::binary);
-    if (!in_async) return false;
-    out << in_async.rdbuf();
-    out.clear();
-  }
-
   out.seekp(0);
   write_header(out, header);
   out.close();
 
   std::filesystem::remove(temp_sync_path);
-  std::filesystem::remove(temp_async_path);
 
   std::cout << "Saved HorizonPairDB to " << path << std::endl;
   return true;
+}
+
+
+uint8_t HorizonPairDBGenerator::calculate_penalty(MDD& mdd1, MDD& mdd2) {
+  struct State {
+    Vertex* v1;
+    Vertex* v2;
+    uint8_t penalty;
+
+    bool operator<(const State& o) const {
+      if (v1 != o.v1) return v1 < o.v1;
+      if (v2 != o.v2) return v2 < o.v2;
+      return penalty < o.penalty;
+    }
+    bool operator==(const State& o) const {
+      return v1 == o.v1 && v2 == o.v2;
+    }    
+  };
+
+  thread_local std::vector<State> current_layer;
+  thread_local std::vector<State> next_layer;
+  
+  current_layer.clear();
+  current_layer.push_back({mdd1.frontiers[0][0].v, mdd2.frontiers[0][0].v, 0});
+
+  // Allocate once per thread, reuse endlessly
+  thread_local std::vector<MDD::Entry*> in_f1;
+  thread_local std::vector<MDD::Entry*> in_f2;
+  // Assuming G->V.size() is known/accessible, otherwise resize on first use
+  if (in_f1.empty()) {
+    in_f1.resize(G->V.size(), nullptr);
+    in_f2.resize(G->V.size(), nullptr);
+  }
+
+  int horizon = mdd1.frontiers.size();
+  for (int t = 1; t < horizon; ++t) {
+    next_layer.clear();
+
+    for (MDD::Entry& e : mdd1.frontiers[t]) in_f1[e.v->id] = &e;
+    for (MDD::Entry& e : mdd2.frontiers[t]) in_f2[e.v->id] = &e;
+
+    for (const auto& state : current_layer) {
+      auto candidates_1 = ConcatView<Vertex*>(state.v1, state.v1->neighbor);
+      auto candidates_2 = ConcatView<Vertex*>(state.v2, state.v2->neighbor);
+
+      for (Vertex* v1 : candidates_1) {
+        MDD::Entry* entry1 = in_f1[v1->id];
+
+        if (entry1 == nullptr) continue;
+
+        for (Vertex* v2 : candidates_2) {
+          MDD::Entry* entry2 = in_f2[v2->id];
+
+          if (entry2 == nullptr) continue;
+          if (entry1->v == state.v1 && entry2->v == state.v2) continue; // 2 waits are not valid
+          uint8_t penalty = entry1->penalty + entry2->penalty;
+          if (penalty > MARGIN) continue;
+
+          if (v1 == v2) continue; // Vertex conflict
+          if (state.v1 == v2 && state.v2 == v1) continue; // Swap conflict
+
+          next_layer.push_back({v1, v2, penalty});
+        }
+      }
+    }
+
+    // Cleanup
+    for (MDD::Entry& e : mdd1.frontiers[t]) in_f1[e.v->id] = nullptr;
+    for (MDD::Entry& e : mdd2.frontiers[t]) in_f2[e.v->id] = nullptr;
+
+    if (next_layer.empty()) return MARGIN + 1; 
+
+    std::sort(next_layer.begin(), next_layer.end());
+    next_layer.erase(std::unique(next_layer.begin(), next_layer.end()), next_layer.end());
+
+    current_layer.swap(next_layer);
+  }
+
+  uint8_t best = MARGIN + 1;
+  for (const auto& state : current_layer) best = std::min(best, state.penalty);
+  return best;
 }

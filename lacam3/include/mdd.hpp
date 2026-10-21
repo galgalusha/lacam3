@@ -5,7 +5,17 @@
 #include "../include/instance.hpp"
 #include "absl/hash/hash.h"
 
+
 struct MDD {
+  struct Entry {
+    Vertex* v;
+    uint8_t cost;
+    uint8_t penalty;
+  
+    bool operator==(const Entry& other) const {
+      return (v == other.v) && (cost == other.cost);
+    }
+  };
 
   // an index in frontiers represents time so that frontiers[t]
   // is an MDD frontier, meaning, all the vertices that are on one of the
@@ -13,9 +23,9 @@ struct MDD {
   // one vertex, the vertex the agent is at time 0.
   // The frontiers only go on in time until a specific horizon which is
   // frontiers.size(), so they do not necessarilly reach the goal of the agent.
-  std::vector<std::vector<Vertex*>> frontiers;
+  std::vector<std::vector<Entry>> frontiers;
 
-  void populate(DistTable* D, Vertex* v_i, Vertex* v_g, int size, int M = 0);
+  void populate(DistTable* D, Vertex* v_i, Vertex* v_g, int depth, int M = 0);
 
   void render(Instance* ins);
 
@@ -28,7 +38,7 @@ struct MDD {
       const auto& f2 = other.frontiers[t];
       if (f1.size() != f2.size()) return false;
       for (size_t i = 0; i < f1.size(); ++i) {
-        if (f1[i]->id != f2[i]->id) return false;
+        if (!(f1[i] == f2[i])) return false;
       }
     }
     return true;
@@ -39,8 +49,8 @@ struct MDD {
   friend H AbslHashValue(H h, const MDD& mdd) {
     for (const auto& frontier : mdd.frontiers) {
       h = H::combine(std::move(h), frontier.size());
-      for (Vertex* v : frontier) {
-          h = H::combine(std::move(h), v->id);
+      for (const Entry& entry : frontier) {
+          h = H::combine(std::move(h), entry.v->id, entry.cost);
       }
     }
     return h;

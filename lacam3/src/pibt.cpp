@@ -100,6 +100,8 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
 
 void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to, const int start)
 {
+  uint32_t mdd_i = get_mdd_id(Q_from[i]->id, goals[i]->id);
+
   for (int k = start; k < num_neighbors; ++k) {
     Vertex* u_i = neighbors[k];
     if (u_i == Q_from[i]) continue;
@@ -109,27 +111,24 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
 
     uint32_t mdd_u_i = get_mdd_id(u_i->id, goals[i]->id);
 
-    //
-    // Scenario 1: Agent j already moved  (Q_to[j] != nullptr)
-    //
     for (const auto& conflict : pair_db->penalties[mdd_u_i]) {
       uint32_t mdd_j = conflict.mdd_id;
       double penalty = conflict.penalty;
-      int j = mdd_registry.mdd_id_to_agent_next[mdd_j];
+      int j;
+
+      //
+      // Scenario 1: Agent j already moved
+      //
+      j = mdd_registry.mdd_id_to_agent_next[mdd_j];
       if (j != mdd_registry.NO_AGENT && j != i && Q_to[j] != nullptr) {
         if (penalty > max_penalty) max_penalty = penalty;
         total_penalty += penalty;
       }
-    }
-
-    //
-    // Scenario 2: Agent j did not yet move  (Q_to[j] == nullptr)
-    //
-    for (const auto& conflict : pair_db->time_shifted_penalties[mdd_u_i]) {
-      uint32_t mdd_j = conflict.mdd_id;
-      double penalty = conflict.penalty;
-      int j = mdd_registry.mdd_id_to_agent_now[mdd_j];
-      if (j != mdd_registry.NO_AGENT && j != i && Q_to[j] == nullptr && Q_from[j] != u_i) {
+      //
+      // Scenario 2: Agent j did not yet move
+      //
+      j = mdd_registry.mdd_id_to_agent_now[mdd_j];
+      if (j != mdd_registry.NO_AGENT && j != i && Q_to[j] == nullptr) {
         double speculated_penalty = penalty * DISCOUNT_FACTOR;
         if (speculated_penalty > max_penalty) max_penalty = speculated_penalty;
         total_penalty += speculated_penalty;
@@ -137,38 +136,21 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
     }
 
     //
-    // Scenario 3: Agent j is going to be pushed by agent i so that u_i==Q_from[j]
+    // Scenario 3: Agent j is going to be pushed by agent i so that u_i==u_j
     //             therefore, mdd_j does not exist in conflicts[mdd_i]
     //
     int j = occupied_now[u_i->id];
     if (j != NO_AGENT && j != i && Q_to[j] == nullptr) {
-      // uint32_t mdd_i = get_mdd_id(Q_from[i]->id, goals[i]->id);
-      double penalty = get_mdd_panelaty_for_push(i, u_i, mdd_u_i, j, Q_from) * DISCOUNT_FACTOR;
+      uint32_t mdd_j = get_mdd_id(u_i->id, goals[j]->id);
+      double penalty = pair_db->get_penalty(mdd_i, mdd_j) * DISCOUNT_FACTOR;
       if (penalty > max_penalty) max_penalty = penalty;
       total_penalty += penalty;
-    } 
+    }
 
     double final_penalty = max_penalty + (total_penalty - max_penalty) * 0.25;
     // Write the final maximum penalty to the pre-allocated array
     dh_values[u_i->id] = DH_WEIGHT * final_penalty;
   }
-}
-
-
-uint8_t PIBT::get_mdd_panelaty_for_push(int i, Vertex* u_i, uint32_t mdd_i_id, int j, const Config& Q_from) {
-  static const uint32_t MAX_PENALTY = 2;
-  if (goals[j]->id == u_i->id) return MAX_PENALTY;
-  uint8_t penalty = MAX_PENALTY;
-  auto& j_frontiers = pair_db->mdd_by_id[get_mdd_id(u_i->id, goals[j]->id)].frontiers[1];
-  for (auto u_j : j_frontiers) {
-    if (u_j->id == Q_from[i]->id) continue; // swap conflict with i.
-    if (occupied_next[u_j->id] != NO_AGENT) continue; // vertex conflict
-    uint32_t mdd_u_j = get_mdd_id(u_j->id, goals[j]->id);
-    uint8_t u_j_penalty = pair_db->get_penalty(mdd_i_id, mdd_u_j);
-    if (u_j_penalty == 0) return 0;
-    if (u_j_penalty < penalty) penalty = u_j_penalty;
-  }
-  return penalty;
 }
 
 

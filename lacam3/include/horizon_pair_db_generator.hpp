@@ -14,6 +14,8 @@ struct HorizonPairDBGenerator {
 
   static int HORIZON;
   static int MDD_SIZE;
+  static int MARGIN;
+
   Graph* G;
   DistTable* D;
   size_t V_SIZE;
@@ -33,8 +35,7 @@ struct HorizonPairDBGenerator {
   // where the index is t * (G->V.size()) + vertex_id.
   std::vector<std::vector<uint32_t>> mdd_by_t_s;
 
-  uint8_t calculate_sync_time_penalty(MDD& mdd1, MDD& mdd2);
-  uint8_t calculate_time_shifted_penalty(MDD& constrained_mdd, MDD& other_mdd);
+  uint8_t calculate_penalty(MDD& mdd1, MDD& mdd2);
 
   void generate_mdds();
 
@@ -44,13 +45,7 @@ struct HorizonPairDBGenerator {
   // each bulk to <name>_sync_conflicts.tmp and <name>_async_conflicts.tmp.
   void generate_all_conflicts_in_bulks(int bulk_size = 10000);
 
-  // Prompts the user for (v_i, g_i), renders the resulting MDD, and repeats
-  // indefinitely until the process is killed.
-  void interactive_mdd_test();
-
   void write_header(std::ofstream& out, const HorizonPairDBFileHeader& header);
-
-  void write_mdd(std::ofstream& out, const MDD& mdd);
 
   void write_mdd_by_id_section(std::ofstream& out);
 
