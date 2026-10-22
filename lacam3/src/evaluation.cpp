@@ -180,6 +180,23 @@ void EvalRunner::run_config(EvalConfig& conf)
   Planner::PIBT_NUM = conf.pibt_num;
   Planner::REFINER_NUM = conf.refiner_num;
 
+  std::unique_ptr<Graph> G = std::make_unique<Graph>(map_path.string());
+  std::unique_ptr<HorizonPairDB> pair_db;
+  if (conf.pair_db) {
+    const auto db_name =
+        "H_" + std::to_string(conf.pair_db_horizon) + "_M_" +
+        std::to_string(conf.pair_db_margin) + "_" +
+        map_path.stem().string();
+    pair_db = std::make_unique<HorizonPairDB>(G.get(), db_name);
+    if (!pair_db->load_from_file()) {
+      throw std::runtime_error("could not load pair database '" + db_name +
+                                "'");
+    }
+    PIBT::pair_db = pair_db.get();
+  } else {
+    PIBT::pair_db = nullptr;
+  }
+
   for (const auto& scen_path : scenarios) {
     const auto scen_name = scen_path.filename().string();
     bool all_done = true;
@@ -194,22 +211,6 @@ void EvalRunner::run_config(EvalConfig& conf)
       throw std::runtime_error("scenario '" + scen_path.string() +
                                "' does not contain a valid instance for " +
                                std::to_string(conf.num_of_agents) + " agents");
-    }
-
-    std::unique_ptr<HorizonPairDB> pair_db;
-    if (conf.pair_db) {
-      const auto db_name =
-          "H_" + std::to_string(conf.pair_db_horizon) + "_M_" +
-          std::to_string(conf.pair_db_margin) + "_" +
-          map_path.stem().string();
-      pair_db = std::make_unique<HorizonPairDB>(instance.G, db_name);
-      if (!pair_db->load_from_file()) {
-        throw std::runtime_error("could not load pair database '" + db_name +
-                                 "'");
-      }
-      PIBT::pair_db = pair_db.get();
-    } else {
-      PIBT::pair_db = nullptr;
     }
 
     for (int seed = 0; seed < conf.seeds_per_scene; ++seed) {
