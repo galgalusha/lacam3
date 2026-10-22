@@ -13,6 +13,7 @@ static void load_conf(cereal::JSONInputArchive &ar, EvalConfig &c)
      cereal::make_nvp("seeds_per_scene", c.seeds_per_scene),
      cereal::make_nvp("pair_db", c.pair_db),
      cereal::make_nvp("pair_db_horizon", c.pair_db_horizon),
+     cereal::make_nvp("pair_db_margin", c.pair_db_margin),
      cereal::make_nvp("no_star", c.no_star),
      cereal::make_nvp("no_scatter", c.no_scatter),
      cereal::make_nvp("pibt_num", c.pibt_num),

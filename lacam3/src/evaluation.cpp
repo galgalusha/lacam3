@@ -136,9 +136,10 @@ void EvalRunner::run_config(EvalConfig& conf)
       conf.pibt_num <= 0 || conf.refiner_num < 0 || conf.objective < 0) {
     throw std::invalid_argument("evaluation config contains an invalid value");
   }
-  if (conf.pair_db && conf.pair_db_horizon < 0) {
+  if (conf.pair_db && (conf.pair_db_horizon < 0 || conf.pair_db_margin < 0)) {
     throw std::invalid_argument(
-        "pair_db_horizon must be non-negative when pair_db is enabled");
+        "pair_db_horizon and pair_db_margin must be non-negative when "
+        "pair_db is enabled");
   }
 
   const auto map_path = find_map_file(conf.asset);
@@ -198,7 +199,8 @@ void EvalRunner::run_config(EvalConfig& conf)
     std::unique_ptr<HorizonPairDB> pair_db;
     if (conf.pair_db) {
       const auto db_name =
-          "H_" + std::to_string(conf.pair_db_horizon) + "_" +
+          "H_" + std::to_string(conf.pair_db_horizon) + "_M_" +
+          std::to_string(conf.pair_db_margin) + "_" +
           map_path.stem().string();
       pair_db = std::make_unique<HorizonPairDB>(instance.G, db_name);
       if (!pair_db->load_from_file()) {

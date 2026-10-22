@@ -18,6 +18,7 @@ struct EvalConfig {
   int seeds_per_scene = 1;
   bool pair_db = false;
   int pair_db_horizon = 0;
+  int pair_db_margin = 0;
   bool no_star = false;
   bool no_scatter = false;
   int pibt_num = 10;
