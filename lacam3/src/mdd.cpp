@@ -1,5 +1,6 @@
 #include "../include/mdd.hpp"
 #include "../include/drawing.hpp"
+#include "../include/concat_view.hpp"
 
 #include "absl/container/inlined_vector.h"
 #include <sstream>
@@ -9,49 +10,49 @@
 
 void MDD::populate(DistTable* D, Vertex* v_i, Vertex* v_g, int depth, int M) {
   frontiers.resize(depth);
+  edges.resize(depth);
   frontiers[0].push_back({v_i, 0, 0});
   
   int D_0 = D->get(v_i->id, v_g->id);
 
   for (int t = 1; t < depth; t++) { 
+    //
+    // For time t
+    //
     for (Entry& parent_entry : frontiers[t - 1]) {
+      //
+      // For parent at time t
+      //
+      parent_entry.edge_start = edges[t-1].size();
+      parent_entry.edge_count = 0;      
       
-      // 1. Spatial neighbors
-      for (Vertex* v_next : parent_entry.v->neighbor) {
-        uint8_t cost = parent_entry.cost + 1;
+      for (Vertex* v_next : ConcatView(parent_entry.v, parent_entry.v->neighbor)) {
+        bool is_wait_on_goal = parent_entry.v == v_g && v_next == v_g;
+        uint8_t cost = parent_entry.cost + (is_wait_on_goal ? 0 : 1);
         int penalty = std::max(0, cost + D->get(v_next->id, v_g->id) - D_0);
         if (penalty <= M) {
-          Entry new_entry = { v_next, cost, penalty };
-          auto it = std::find_if(frontiers[t].begin(), frontiers[t].end(),
-                       [&](const Entry& e) { return e.v == v_next; });
-          if (it == frontiers[t].end()) {
-            frontiers[t].push_back(new_entry);
-          } else if (penalty < it->penalty) {
-            it->cost = new_entry.cost;
-            it->penalty = new_entry.penalty;
-          }
-        }
-      }
-      
-      // 2. Wait move
-      Entry new_entry = parent_entry; 
-      bool is_at_goal = new_entry.v == v_g;
-      new_entry.cost += is_at_goal ? 0 : 1;
-      new_entry.penalty = std::max(0, new_entry.cost + D->get(new_entry.v->id, v_g->id) - D_0);      
-      if (new_entry.penalty <= M) {
+          Entry new_entry = { v_next, 0, 0, cost, penalty };
+          auto it = std::find(frontiers[t].begin(), frontiers[t].end(), new_entry);
+          uint16_t child_idx;
 
-        auto it = std::find_if(frontiers[t].begin(), frontiers[t].end(),
-                      [&](const Entry& e) { return e.v == new_entry.v; });
-        if (it == frontiers[t].end()) {
-          frontiers[t].push_back(new_entry);
-        } else if (new_entry.penalty < it->penalty) {
-          it->cost = new_entry.cost;
-          it->penalty = new_entry.penalty;
+          if (it == frontiers[t].end()) {
+            // State doesn't exist yet. Push it and record its new index.
+            child_idx = frontiers[t].size();
+            frontiers[t].push_back(new_entry);
+          } else {
+            // State already exists! Grab the index of the existing entry to merge paths.
+            child_idx = std::distance(frontiers[t].begin(), it);
+          }
+        
+          // Push the child index to the flat edge array and increment the parent's count
+          edges[t-1].push_back(child_idx);
+          parent_entry.edge_count++;
         }
       }
-    }
+    } // parent
+
     if (frontiers[t].empty()) break; 
-  }
+  } // time
 }
 
 

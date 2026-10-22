@@ -340,8 +340,9 @@ bool HorizonPairDBGenerator::generate_and_save() {
 }
 
 
-uint8_t HorizonPairDBGenerator::calculate_penalty(MDD& mdd1, MDD& mdd2) {
+uint8_t HorizonPairDBGenerator::calculate_penalty_old(MDD& mdd1, MDD& mdd2) {
   struct State {
+    State* parent;
     Vertex* v1;
     Vertex* v2;
     uint8_t penalty;
@@ -356,11 +357,12 @@ uint8_t HorizonPairDBGenerator::calculate_penalty(MDD& mdd1, MDD& mdd2) {
     }    
   };
 
-  thread_local std::vector<State> current_layer;
-  thread_local std::vector<State> next_layer;
+  thread_local std::vector<State*> current_layer;
+  thread_local std::vector<State*> next_layer;
   
   current_layer.clear();
-  current_layer.push_back({mdd1.frontiers[0][0].v, mdd2.frontiers[0][0].v, 0});
+  State* state0 = new State({nullptr, mdd1.frontiers[0][0].v, mdd2.frontiers[0][0].v, 0});
+  current_layer.push_back(state0);
 
   // Allocate once per thread, reuse endlessly
   thread_local std::vector<MDD::Entry*> in_f1;
@@ -378,9 +380,9 @@ uint8_t HorizonPairDBGenerator::calculate_penalty(MDD& mdd1, MDD& mdd2) {
     for (MDD::Entry& e : mdd1.frontiers[t]) in_f1[e.v->id] = &e;
     for (MDD::Entry& e : mdd2.frontiers[t]) in_f2[e.v->id] = &e;
 
-    for (const auto& state : current_layer) {
-      auto candidates_1 = ConcatView<Vertex*>(state.v1, state.v1->neighbor);
-      auto candidates_2 = ConcatView<Vertex*>(state.v2, state.v2->neighbor);
+    for (State* state : current_layer) {
+      auto candidates_1 = ConcatView<Vertex*>(state->v1, state->v1->neighbor);
+      auto candidates_2 = ConcatView<Vertex*>(state->v2, state->v2->neighbor);
 
       for (Vertex* v1 : candidates_1) {
         MDD::Entry* entry1 = in_f1[v1->id];
@@ -391,14 +393,15 @@ uint8_t HorizonPairDBGenerator::calculate_penalty(MDD& mdd1, MDD& mdd2) {
           MDD::Entry* entry2 = in_f2[v2->id];
 
           if (entry2 == nullptr) continue;
-          if (entry1->v == state.v1 && entry2->v == state.v2) continue; // 2 waits are not valid
+          if (entry1->v == state->v1 && entry2->v == state->v2) continue; // 2 waits are not valid
           uint8_t penalty = entry1->penalty + entry2->penalty;
           if (penalty > MARGIN) continue;
 
           if (v1 == v2) continue; // Vertex conflict
-          if (state.v1 == v2 && state.v2 == v1) continue; // Swap conflict
+          if (state->v1 == v2 && state->v2 == v1) continue; // Swap conflict
 
-          next_layer.push_back({v1, v2, penalty});
+          State* new_state = new State({state, v1, v2, penalty});
+          next_layer.push_back(new_state);
         }
       }
     }
@@ -415,7 +418,87 @@ uint8_t HorizonPairDBGenerator::calculate_penalty(MDD& mdd1, MDD& mdd2) {
     current_layer.swap(next_layer);
   }
 
-  uint8_t best = MARGIN + 1;
-  for (const auto& state : current_layer) best = std::min(best, state.penalty);
-  return best;
+  uint8_t best_penalty = MARGIN + 1;
+  State* best_state;
+  for (State* state : current_layer) {
+    if (state->penalty < best_penalty) {
+      best_penalty = state->penalty;
+      best_state = state;
+    }
+  }
+  while (best_state != nullptr) {
+    std::cout << "(" << best_state->v1->id << ", " << best_state->v2->id << ") <-- ";
+    best_state = best_state->parent;
+  }
+  std::cout << std::endl;
+  
+  return best_penalty;
 }
+
+
+uint8_t HorizonPairDBGenerator::calculate_penalty(MDD& mdd1, MDD& mdd2) {
+  struct State {
+    uint16_t idx1;
+    uint16_t idx2;
+
+    bool operator<(const State& o) const {
+      if (idx1 != o.idx1) return idx1 < o.idx1;
+      return idx2 < o.idx2;
+    }
+    bool operator==(const State& o) const {
+      return idx1 == o.idx1 && idx2 == o.idx2;
+    }    
+  };
+
+  thread_local std::vector<State> current_layer;
+  thread_local std::vector<State> next_layer;
+  
+  current_layer.clear();
+  current_layer.push_back({0, 0}); // Both start at index 0 of frontiers[0]
+
+  int horizon = mdd1.frontiers.size();
+  for (int t = 1; t < horizon; ++t) {
+    next_layer.clear();
+
+    for (const auto& state : current_layer) {
+      const MDD::Entry& e1 = mdd1.frontiers[t-1][state.idx1];
+      const MDD::Entry& e2 = mdd2.frontiers[t-1][state.idx2];
+
+      // Traverse pre-calculated flat edges
+      for (int i = 0; i < e1.edge_count; ++i) {
+        uint16_t c1_idx = mdd1.edges[t-1][e1.edge_start + i];
+        const MDD::Entry& c1 = mdd1.frontiers[t][c1_idx];
+
+        for (int j = 0; j < e2.edge_count; ++j) {
+          uint16_t c2_idx = mdd2.edges[t-1][e2.edge_start + j];
+          const MDD::Entry& c2 = mdd2.frontiers[t][c2_idx];
+          
+          // Pure penalty extraction
+          if (c1.penalty + c2.penalty > MARGIN) continue;
+
+          if (c1.v == c2.v) continue; // Vertex conflict
+          if (e1.v == c2.v && e2.v == c1.v) continue; // Edge conflict
+
+          next_layer.push_back({c1_idx, c2_idx});
+        }
+      }
+    }
+
+    if (next_layer.empty()) return MARGIN + 1; 
+
+    std::sort(next_layer.begin(), next_layer.end());
+    next_layer.erase(std::unique(next_layer.begin(), next_layer.end()), next_layer.end());
+
+    current_layer.swap(next_layer);
+  }
+
+  uint8_t best_penalty = MARGIN + 1;
+  for (const auto& state : current_layer) {
+    uint8_t joint_penalty = mdd1.frontiers.back()[state.idx1].penalty + 
+                            mdd2.frontiers.back()[state.idx2].penalty;
+    best_penalty = std::min(best_penalty, joint_penalty);
+  }
+  
+  return best_penalty;
+}
+

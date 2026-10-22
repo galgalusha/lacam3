@@ -181,24 +181,22 @@ void HorizonPairDB::integration_test1() {
     "..@..",  //  12 13  ..   14  15
   };
   Graph* G = new Graph(grid);
-  HorizonPairDB DB = save_and_load_db(G, HORIZON, 0);
+  HorizonPairDB DB = save_and_load_db(G, HORIZON, MARGIN);
+  // HorizonPairDB DB(G, "bla");
   DistTable* D = create_dist_table(G);
 
 
-  // i: (4, 3)->(3, 3), j: (3, 3)->(4, 3)
+  // MDD MDD_i, MDD_j;
+  // MDD_i.populate(D, G->U[3 * G->width + 4], G->U[3 * G->width + 3], 10, MARGIN);
+  // MDD_j.populate(D, G->U[3 * G->width + 3], G->U[3 * G->width + 4], 10, MARGIN);
+  // std::cout << "MDD_i: " << MDD_i.str() << std::endl;
+  // std::cout << "MDD_j: " << MDD_j.str() << std::endl;
 
-
-  MDD MDD_i, MDD_j;
-  MDD_i.populate(D, G->U[3 * G->width + 4], G->U[3 * G->width + 3], 5, MARGIN);
-  MDD_j.populate(D, G->U[3 * G->width + 3], G->U[3 * G->width + 4], 5, MARGIN);
-  std::cout << "MDD_i: " << MDD_i.str() << std::endl;
-  std::cout << "MDD_j: " << MDD_j.str() << std::endl;
-
-  HorizonPairDBGenerator generator(G, "bla");
-  HorizonPairDBGenerator::MARGIN = MARGIN;
-  uint8_t penalty = generator.calculate_penalty(MDD_i, MDD_j);
-  std::cout << "Penalty: " << (int)penalty << std::endl;
-  return;
+  // HorizonPairDBGenerator generator(G, "bla");
+  // HorizonPairDBGenerator::MARGIN = MARGIN;
+  // uint8_t penalty = generator.calculate_penalty(MDD_i, MDD_j);
+  // std::cout << "Penalty: " << (int)penalty << std::endl;
+  // return;
 
 
   std::cout << "Testing sync-time penalties" << std::endl;

@@ -9,11 +9,13 @@
 struct MDD {
   struct Entry {
     Vertex* v;
+    uint32_t edge_start;
+    uint16_t edge_count;
     uint8_t cost;
     uint8_t penalty;
   
     bool operator==(const Entry& other) const {
-      return (v == other.v) && (cost == other.cost);
+      return (v == other.v) && (cost == other.cost) && (penalty == other.penalty);
     }
   };
 
@@ -24,6 +26,9 @@ struct MDD {
   // The frontiers only go on in time until a specific horizon which is
   // frontiers.size(), so they do not necessarilly reach the goal of the agent.
   std::vector<std::vector<Entry>> frontiers;
+
+  // edges[t] stores the indices of the children in frontiers[t+1]
+  std::vector<std::vector<uint16_t>> edges;  
 
   void populate(DistTable* D, Vertex* v_i, Vertex* v_g, int depth, int M = 0);
 
@@ -50,7 +55,7 @@ struct MDD {
     for (const auto& frontier : mdd.frontiers) {
       h = H::combine(std::move(h), frontier.size());
       for (const Entry& entry : frontier) {
-          h = H::combine(std::move(h), entry.v->id, entry.cost);
+          h = H::combine(std::move(h), entry.v->id, entry.cost, entry.penalty);
       }
     }
     return h;
