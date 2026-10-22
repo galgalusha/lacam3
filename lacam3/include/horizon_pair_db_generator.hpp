@@ -39,7 +39,6 @@ struct HorizonPairDBGenerator {
   // where the index is t * (G->V.size()) + vertex_id.
   std::vector<std::vector<uint32_t>> mdd_by_t_s;
 
-  uint8_t calculate_penalty_old(MDD& mdd1, MDD& mdd2);
   uint8_t calculate_penalty(MDD& mdd1, MDD& mdd2);
 
   void generate_mdds();
