@@ -16,9 +16,11 @@ inline const std::string HORIZON_PAIR_DB_FILE_EXTENSION = ".mdd_db3";
 // write_mdd/read_mdd in the generator/runtime classes).
 inline constexpr uint8_t HORIZON_PAIR_DB_MDD_SENTINEL = 255;
 
-// Header of the .mdd_db file: MDD count plus the byte offset of each section.
+// Header of the .mdd_db file: MDD count, horizon, margin plus the byte offset of each section.
 struct HorizonPairDBFileHeader {
   uint32_t num_mdds;
+  int32_t horizon;
+  int32_t margin;
   uint64_t offset_mdd_by_id;
   uint64_t offset_mdd_id_by_v_g;
   uint64_t offset_conflicts;

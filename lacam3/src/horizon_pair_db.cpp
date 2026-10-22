@@ -40,6 +40,8 @@ HorizonPairDB::HorizonPairDB(Graph* _G, std::string _name) : G(_G), V_SIZE(_G->V
 
 bool HorizonPairDB::read_header(std::ifstream& in, HorizonPairDBFileHeader& header) {
   in.read(reinterpret_cast<char*>(&header.num_mdds), sizeof(header.num_mdds));
+  in.read(reinterpret_cast<char*>(&header.horizon), sizeof(header.horizon));
+  in.read(reinterpret_cast<char*>(&header.margin), sizeof(header.margin));
   in.read(reinterpret_cast<char*>(&header.offset_mdd_by_id), sizeof(header.offset_mdd_by_id));
   in.read(reinterpret_cast<char*>(&header.offset_mdd_id_by_v_g), sizeof(header.offset_mdd_id_by_v_g));
   in.read(reinterpret_cast<char*>(&header.offset_conflicts), sizeof(header.offset_conflicts));
@@ -124,6 +126,8 @@ bool HorizonPairDB::load_from_file() {
     return false;
   }
   mdd_count = header.num_mdds;
+  HORIZON = header.horizon;
+  MARGIN = header.margin;
 
   in.seekg(header.offset_mdd_by_id);
   if (!read_mdd_by_id_section(in)) return false;

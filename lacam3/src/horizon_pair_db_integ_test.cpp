@@ -21,17 +21,8 @@ static DistTable* create_dist_table(Graph* G) {
 
 
 static HorizonPairDB save_and_load_db(Graph* G, int horizon, int margin) {
-  int orig_horizon = HorizonPairDBGenerator::HORIZON;
-  int orig_margin = HorizonPairDBGenerator::MARGIN;
-  int orig_mdd_size = HorizonPairDBGenerator::MDD_SIZE;
-  HorizonPairDBGenerator::HORIZON = horizon;
-  HorizonPairDBGenerator::MDD_SIZE = horizon + 1;
-  HorizonPairDBGenerator::MARGIN = margin;
-  HorizonPairDBGenerator DB(G, "test");
+  HorizonPairDBGenerator DB(G, "test", horizon, margin);
   DB.generate_and_save();
-  HorizonPairDBGenerator::HORIZON = orig_horizon;
-  HorizonPairDBGenerator::MDD_SIZE = orig_mdd_size;
-  HorizonPairDBGenerator::MARGIN = orig_margin;
   
   HorizonPairDB loaded_db(G, "test");
   loaded_db.load_from_file();
@@ -154,7 +145,7 @@ static uint8_t get_db_penalty(HorizonPairDB* DB, Vertex* i_start, Vertex* i_goal
 static bool test_sync_time_conflicts(Graph* G, DistTable* D, HorizonPairDB* DB, Vertex* i_start, Vertex* i_goal, Vertex* j_start, Vertex* j_goal) {
   int astar_cost = joint_astar(D, i_start, nullptr, i_goal, j_start, j_goal);
   int naive_cost = D->get(i_start->id, i_goal->id) + D->get(j_start->id, j_goal->id);
-  int astar_penalty = std::min(5, astar_cost - naive_cost);
+  int astar_penalty = std::min(DB->MARGIN + 1, astar_cost - naive_cost);
   int db_penalty = get_db_penalty(DB, i_start, i_goal, j_start, j_goal);
   if (astar_penalty != db_penalty) {
     std::cout << "[TEST FAILED]. DB penalty: " << db_penalty

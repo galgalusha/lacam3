@@ -12,16 +12,20 @@
 struct HorizonPairDBGenerator {
   using MDD_Penalty = HorizonPairDB::MDD_Penalty;
 
-  static int HORIZON;
-  static int MDD_SIZE;
-  static int MARGIN;
+  // Number of steps ahead we are aware of
+  int HORIZON;
+  // Max detour MDD allows beyond optimal paths
+  int MARGIN;
+
+  // MDD::frontiers[0] is the start vertex (time 0), hence the +1.
+  inline int MDD_SIZE() const { return HORIZON + 1; }
 
   Graph* G;
   DistTable* D;
   size_t V_SIZE;
   std::string name;
 
-  HorizonPairDBGenerator(Graph* _G, std::string _name);
+  HorizonPairDBGenerator(Graph* _G, std::string _name, int _horizon, int _margin);
 
   uint32_t mdd_count = 0;
 

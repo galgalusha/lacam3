@@ -179,9 +179,7 @@ int main(int argc, char *argv[])
 
   if (gen_pair_db) {
     const auto db_deadline = Deadline();
-    HorizonPairDBGenerator::HORIZON = H;
-    HorizonPairDBGenerator::MDD_SIZE = H + 2;
-    HorizonPairDBGenerator* db = new HorizonPairDBGenerator(ins.G, pair_db_name);
+    HorizonPairDBGenerator* db = new HorizonPairDBGenerator(ins.G, pair_db_name, H, M);
     if (!db->generate_and_save()) {
         std::cout << "FAILED" << std::endl;
         exit(1);
@@ -202,10 +200,9 @@ int main(int argc, char *argv[])
 //   HorizonPairDBGenerator::test_db_1();
 //   HorizonPairDBGenerator::test_db_time_shift();
 //   HorizonPairDBGenerator::test_db_time_shift_2();
-  HorizonPairDB::integration_test1();
-
+//   HorizonPairDB::integration_test1();
 //  MDD::test_mdd_with_margin();
-  exit(0);
+//  exit(0);
   
 
   if (use_pair_db) {

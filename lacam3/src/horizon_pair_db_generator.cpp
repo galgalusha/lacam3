@@ -18,18 +18,9 @@
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
 
-
-// Number of steps ahead we are aware of
-int HorizonPairDBGenerator::HORIZON = 3;
-
-// Max detour MDD allows beyond optimal paths
-int HorizonPairDBGenerator::MARGIN = 1;
-
 static const int NUM_OF_THREADS = 12;
 
-// MDD::frontiers[0] is the start vertex (time 0).
-// This is why we add 1 to HORIZON.
-int HorizonPairDBGenerator::MDD_SIZE = HorizonPairDBGenerator::HORIZON + 1;
+
 
 
 // Runs a dedicated thread that redraws the progress bar at a fixed rate while
@@ -78,8 +69,8 @@ static DistTable* create_dist_table(Graph* G) {
   return D;
 }
 
-HorizonPairDBGenerator::HorizonPairDBGenerator(Graph* _G, std::string _name)
-    : G(_G), D(create_dist_table(G)), V_SIZE(_G->V.size()), name(_name) {}
+HorizonPairDBGenerator::HorizonPairDBGenerator(Graph* _G, std::string _name, int _horizon, int _margin)
+    : HORIZON(_horizon), MARGIN(_margin), G(_G), D(create_dist_table(G)), V_SIZE(_G->V.size()), name(_name) {}
 
 
 void HorizonPairDBGenerator::generate_mdds() {
@@ -88,7 +79,7 @@ void HorizonPairDBGenerator::generate_mdds() {
   // Pre-allocate master storage
   mdd_id_by_v_g.assign(V_SIZE * V_SIZE, 0);
   mdd_by_id.resize(V_SIZE * V_SIZE);
-  mdd_by_t_s.assign(V_SIZE * (MDD_SIZE + 1), std::vector<uint32_t>());
+  mdd_by_t_s.assign(V_SIZE * (MDD_SIZE() + 1), std::vector<uint32_t>());
 
   std::mutex mdd_count_mtx; // Only used to safely increment the global ID
   std::mutex mdd_mtx2;      // Protects push_back on mdd_by_t_s
@@ -106,7 +97,7 @@ void HorizonPairDBGenerator::generate_mdds() {
       int agent_id = v_i * (int)V_SIZE + g_i;
       
       MDD mdd; 
-      mdd.populate(D, G->V[v_i], G->V[g_i], MDD_SIZE, MARGIN);
+      mdd.populate(D, G->V[v_i], G->V[g_i], MDD_SIZE(), MARGIN);
       
       uint32_t mdd_id;
       bool is_new_mdd = false;
@@ -213,12 +204,12 @@ void HorizonPairDBGenerator::generate_all_conflicts_in_bulks(int bulk_size) {
 
       MDD& mdd = mdd_by_id[mdd_id];
       std::vector<uint32_t> candidates;
-      for (int t = 0; t < MDD_SIZE; t++) {
+      for (int t = 0; t < MDD_SIZE(); t++) {
         for (MDD::Entry& entry : mdd.frontiers[t]) {
           std::vector<uint32_t>* sets[3];
           int num_sets = 0;
           sets[num_sets++] = &mdd_by_t_s[static_cast<size_t>(t) * G->V.size() + entry.v->id];
-          if (t < MDD_SIZE - 1)
+          if (t < MDD_SIZE() - 1)
             sets[num_sets++] = &mdd_by_t_s[static_cast<size_t>(t + 1) * G->V.size() + entry.v->id];
           if (t > 0)
             sets[num_sets++] = &mdd_by_t_s[static_cast<size_t>(t - 1) * G->V.size() + entry.v->id];
@@ -276,6 +267,8 @@ inline bool check_is_accessible(Vertex* from, Vertex* to) {
 
 void HorizonPairDBGenerator::write_header(std::ofstream& out, const HorizonPairDBFileHeader& header) {
   out.write(reinterpret_cast<const char*>(&header.num_mdds), sizeof(header.num_mdds));
+  out.write(reinterpret_cast<const char*>(&header.horizon), sizeof(header.horizon));
+  out.write(reinterpret_cast<const char*>(&header.margin), sizeof(header.margin));
   out.write(reinterpret_cast<const char*>(&header.offset_mdd_by_id), sizeof(header.offset_mdd_by_id));
   out.write(reinterpret_cast<const char*>(&header.offset_mdd_id_by_v_g), sizeof(header.offset_mdd_id_by_v_g));
   out.write(reinterpret_cast<const char*>(&header.offset_conflicts), sizeof(header.offset_conflicts));
@@ -301,7 +294,7 @@ bool HorizonPairDBGenerator::generate_and_save() {
   if (!out) return false;
 
   // Write dummy header to reserve space
-  HorizonPairDBFileHeader header{0, 0, 0, 0};
+  HorizonPairDBFileHeader header{0, HORIZON, MARGIN, 0, 0, 0};
   write_header(out, header);
 
   generate_mdds();

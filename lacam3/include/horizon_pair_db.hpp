@@ -20,6 +20,12 @@ struct HorizonPairDB {
   size_t V_SIZE;
   std::string name;
 
+  // Loaded from the file header by load_from_file().
+  int HORIZON = 0;
+  int MARGIN = 0;
+
+  inline int MDD_SIZE() const { return HORIZON + 1; }
+
   HorizonPairDB(Graph* _G, std::string _name);
 
   uint32_t mdd_count = 0;
