@@ -4,9 +4,10 @@
 
 HorizonPairDB* PIBT::pair_db = nullptr;
 
-const double DH_WEIGHT         = 0.1;
+const double DH_WEIGHT         = 0.01;
 const double RANDOM_TIE_WEIGHT = 0.01;
 const double DISCOUNT_FACTOR   = 0.50;
+const double MAX_ALPHA         = 0.75;
 
 
 PIBT::PIBT(const Graph *_G, Config _goals, DistTable *_D, int seed, bool _flg_swap,
@@ -147,7 +148,7 @@ void PIBT::fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, 
       total_penalty += penalty;
     }
 
-    double final_penalty = max_penalty + (total_penalty - max_penalty) * 0.25;
+    double final_penalty = max_penalty * MAX_ALPHA + total_penalty * (1.0 - MAX_ALPHA);
     // Write the final maximum penalty to the pre-allocated array
     dh_values[u_i->id] = DH_WEIGHT * final_penalty;
   }

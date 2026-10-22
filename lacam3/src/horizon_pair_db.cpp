@@ -7,7 +7,14 @@
 
 
 // Prints median/average/p90/p95 of the number of entries per conflict map.
-static void print_conflict_entry_stats(std::vector<uint32_t> entries_per_map) {
+static void print_conflict_entry_stats(std::vector<uint32_t> entries_per_map,
+                                       const std::vector<uint64_t>& count_per_penalty) {
+  std::cout << "Conflicts per penalty:";
+  for (size_t p = 0; p < count_per_penalty.size(); p++) {
+    std::cout << " [" << p << "]=" << count_per_penalty[p];
+  }
+  std::cout << std::endl;
+
   if (entries_per_map.empty()) return;
   std::sort(entries_per_map.begin(), entries_per_map.end());
 
@@ -90,6 +97,8 @@ bool HorizonPairDB::read_conflicts_section(std::ifstream& in) {
   penalties.assign(num_conflicts, {});
   std::vector<uint32_t> entries_per_map;
   entries_per_map.reserve(num_conflicts);
+  // Max possible penalty is MARGIN + 1
+  std::vector<uint64_t> count_per_penalty(MARGIN + 2, 0);
   for (uint32_t id = 0; id < num_conflicts; id++) {
     uint32_t num_entries;
     in.read(reinterpret_cast<char*>(&num_entries), sizeof(num_entries));
@@ -100,6 +109,8 @@ bool HorizonPairDB::read_conflicts_section(std::ifstream& in) {
       in.read(reinterpret_cast<char*>(&key), sizeof(key));
       in.read(reinterpret_cast<char*>(&value), sizeof(value));
       if (!in) return false;
+      if (value >= count_per_penalty.size()) count_per_penalty.resize(value + 1, 0);
+      count_per_penalty[value]++;
       penalties[id].push_back({key, value});
       penalties[key].push_back({id, value});
     }
@@ -107,7 +118,7 @@ bool HorizonPairDB::read_conflicts_section(std::ifstream& in) {
     if (id % 256 == 0 || id + 1 == num_conflicts) print_horizon_pair_db_progress_bar(id + 1, num_conflicts);
   }
   std::cout << std::endl;
-  print_conflict_entry_stats(entries_per_map);
+  print_conflict_entry_stats(entries_per_map, count_per_penalty);
 
   return true;
 }
