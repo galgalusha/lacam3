@@ -19,6 +19,16 @@
 
 struct PIBT {
 
+  struct MoveScore {
+    uint8_t max_penalty; 
+    uint8_t discounted_max;
+    uint16_t sum_penalty;
+    uint16_t discounted_sum;
+
+    MoveScore() : max_penalty(0), discounted_max(0), sum_penalty(0), discounted_sum(0) {}
+    void reset() { max_penalty = 0; discounted_max = 0; sum_penalty = 0; discounted_sum = 0; }
+  };
+
   static HorizonPairDB* pair_db;
 
   Config goals;
@@ -37,7 +47,7 @@ struct PIBT {
   std::vector<int> occupied_next;               // for quick collision checking
   std::vector<std::array<Vertex *, 5>> C_next;  // next location candidates
   std::vector<double> tie_breakers;             // random values, used in PIBT
-  std::vector<double> dh_values;
+  std::vector<MoveScore> move_scores;
   MDDRegistry mdd_registry;
 
   // swap, used in the LaCAM* paper
@@ -62,7 +72,7 @@ struct PIBT {
                         Vertex *v_pusher_origin, Vertex *v_puller_origin);
   bool is_swap_possible(Vertex *v_pusher_origin, Vertex *v_puller_origin);
 
-  void fill_dh_values(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to, const int start = 0);
+  void fill_move_scores(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to, const int start = 0);
 
 
   inline int pair_key(int i, int j) { 
