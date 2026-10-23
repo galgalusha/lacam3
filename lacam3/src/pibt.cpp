@@ -4,9 +4,7 @@
 
 HorizonPairDB* PIBT::pair_db = nullptr;
 
-const double DH_WEIGHT         = 0.01;
-const double RANDOM_TIE_WEIGHT = 0.01;
-
+const double RANDOM_TIE_WEIGHT = 0.1;
 
 PIBT::PIBT(const Graph *_G, Config _goals, DistTable *_D, int seed, bool _flg_swap,
            Scatter *_scatter)
@@ -135,11 +133,67 @@ void PIBT::fill_move_scores(const int i, const std::array<Vertex*, 5>& neighbors
     if (j != NO_AGENT && j != i && Q_to[j] == nullptr) {
       uint32_t mdd_i = get_mdd_id(Q_from[i]->id, goals[i]->id);
       uint32_t mdd_j = get_mdd_id(u_i->id, goals[j]->id);
-      uint8_t penalty = pair_db->get_penalty(mdd_i, mdd_j);
+      uint8_t penalty = pair_db->get_penalty(mdd_u_i, mdd_j);
       score.discounted_max = std::max(score.discounted_max, penalty);
       score.discounted_sum += penalty;
     }
   }
+}
+
+
+void PIBT::lexicographic_sort(int i, std::array<Vertex *, 5>& C_i_next, int K, Vertex* prioritized_vertex) {
+  std::sort(C_i_next.begin(), C_i_next.begin() + K + 1,
+      [&](Vertex *const v1, Vertex *const v2) {
+        if (v1 == prioritized_vertex) return true;
+        if (v2 == prioritized_vertex) return false;
+        int D1 = D->get(i, v1);
+        int D2 = D->get(i, v2);
+        auto& score1 = move_scores[v1->id];
+        auto& score2 = move_scores[v2->id];
+
+        double D1_plus = (double)D1 + 0.7 * score1.max_penalty;
+        double D2_plus = (double)D2 + 0.7 * score2.max_penalty;
+
+        if (D1_plus != D2_plus) 
+          return D1_plus < D2_plus;
+
+        if (D1 != D2) 
+          return D1 < D2;
+
+        // max penalty
+        if (score1.max_penalty != score2.max_penalty) 
+          return score1.max_penalty < score2.max_penalty;
+        // sum penalty
+        if (score1.sum_penalty != score2.sum_penalty) 
+          return score1.sum_penalty < score2.sum_penalty;
+        // max discounted
+        if (score1.discounted_max != score2.discounted_max) 
+          return score1.discounted_max < score2.discounted_max;
+        // sum discounted
+        if (score1.discounted_sum != score2.discounted_sum) 
+          return score1.discounted_sum < score2.discounted_sum;
+        return tie_breakers[v1->id] < tie_breakers[v2->id];
+      });
+}
+
+
+void PIBT::weighted_sort(int i, std::array<Vertex *, 5>& C_i_next, int K, Vertex* prioritized_vertex) {
+ std::sort(C_i_next.begin(), C_i_next.begin() + K + 1,
+      [&](Vertex *const v1, Vertex *const v2) {
+        if (v1 == prioritized_vertex) return true;
+        if (v2 == prioritized_vertex) return false;
+        int D1 = D->get(i, v1);
+        int D2 = D->get(i, v2);
+        if (D1 != D2) return D1 < D2;
+
+        auto& score1 = move_scores[v1->id];
+        auto& score2 = move_scores[v2->id];
+        double weight1 = 0.75 * (score1.max_penalty + 0.5 * score1.discounted_max) + 0.25 * (score1.sum_penalty + 0.5 * score1.discounted_sum);
+        double weight2 = 0.75 * (score2.max_penalty + 0.5 * score2.discounted_max) + 0.25 * (score2.sum_penalty + 0.5 * score2.discounted_sum);
+        if (weight1 != weight2) return weight1 < weight2;
+
+        return tie_breakers[v1->id] < tie_breakers[v2->id];
+      });
 }
 
 
@@ -209,43 +263,9 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
 
   if (pair_db != nullptr && swap_agent == NO_AGENT) {
     fill_move_scores(i, C_i_next, K + 1, Q_from, Q_to, 0);
-  
-    std::sort(C_i_next.begin(), C_i_next.begin() + K + 1,
-          [&](Vertex *const v1, Vertex *const v2) {
-            if (v1 == prioritized_vertex) return true;
-            if (v2 == prioritized_vertex) return false;
-            int D1 = D->get(i, v1);
-            int D2 = D->get(i, v2);
-            auto& score1 = move_scores[v1->id];
-            auto& score2 = move_scores[v2->id];
-
-            // double D1_plus = (double)D1 + 0.7 * score1.max_penalty;
-            // double D2_plus = (double)D2 + 0.7 * score2.max_penalty;
-            double D1_plus = (double)D1 + 0.7 * (0.8 * score1.max_penalty + 0.2 * score1.discounted_max);
-            double D2_plus = (double)D2 + 0.7 * (0.8 * score2.max_penalty + 0.2 * score2.discounted_max);
-
-            if (D1_plus != D2_plus) 
-              return D1_plus < D2_plus;
-
-            if (D1 != D2) 
-              return D1 < D2;
-
-            // max penalty
-            if (score1.max_penalty != score2.max_penalty) 
-              return score1.max_penalty < score2.max_penalty;
-            // sum penalty
-            if (score1.sum_penalty != score2.sum_penalty) 
-              return score1.sum_penalty < score2.sum_penalty;
-            // max discounted
-            if (score1.discounted_max != score2.discounted_max) 
-              return score1.discounted_max < score2.discounted_max;
-            // sum discounted
-            if (score1.discounted_sum != score2.discounted_sum) 
-              return score1.discounted_sum < score2.discounted_sum;
-            return tie_breakers[v1->id] < tie_breakers[v2->id];
-          });
-  }  
-
+    lexicographic_sort(i, C_i_next, K, prioritized_vertex);
+    // weighted_sort(i, C_i_next, K, prioritized_vertex);
+  }
   // main loop
   for (int k = 0; k < K + 1; ++k) {
     // // Lazy dh values evaluation (and re-sorting)

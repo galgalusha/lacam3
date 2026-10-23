@@ -18,7 +18,7 @@
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
 
-static const int NUM_OF_THREADS = 12;
+static const int NUM_OF_THREADS = 7;
 
 
 

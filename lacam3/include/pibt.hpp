@@ -87,4 +87,6 @@ struct PIBT {
     return pair_db->mdd_id_by_v_g[agent_id_for_db];
   }
 
+  void lexicographic_sort(int i, std::array<Vertex *, 5>& C_i_next, int K, Vertex* prioritized_vertex);
+  void weighted_sort(int i, std::array<Vertex *, 5>& C_i_next, int K, Vertex* prioritized_vertex);
 };
