@@ -177,6 +177,19 @@ int main(int argc, char *argv[])
   Planner::CHECKPOINTS_DURATION =
       std::stof(program.get<std::string>("checkpoints-duration")) * 1000;
 
+
+//   MDD::test_joint_mdd();
+//   MDD::test_joint_mdd2();
+//   MDD::test_joint_mdd_with_wait();
+//   MDD::test_joint_mdd_with_wait2();
+//   HorizonPairDBGenerator::test_db_1();
+//   HorizonPairDBGenerator::test_db_time_shift();
+//   HorizonPairDBGenerator::test_db_time_shift_2();
+//  HorizonPairDB::integration_test1();
+//  MDD::test_mdd_with_margin();
+//  exit(0);
+  
+  
   if (gen_pair_db) {
     const auto db_deadline = Deadline();
     HorizonPairDBGenerator* db = new HorizonPairDBGenerator(ins.G, pair_db_name, H, M);
@@ -192,17 +205,6 @@ int main(int argc, char *argv[])
               << std::endl;
     exit(0);
   }
-
-//   MDD::test_joint_mdd();
-//   MDD::test_joint_mdd2();
-//   MDD::test_joint_mdd_with_wait();
-//   MDD::test_joint_mdd_with_wait2();
-//   HorizonPairDBGenerator::test_db_1();
-//   HorizonPairDBGenerator::test_db_time_shift();
-//   HorizonPairDBGenerator::test_db_time_shift_2();
-//   HorizonPairDB::integration_test1();
-//  MDD::test_mdd_with_margin();
-//  exit(0);
   
 
   if (use_pair_db) {

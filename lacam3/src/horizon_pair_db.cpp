@@ -106,13 +106,15 @@ bool HorizonPairDB::read_conflicts_section(std::ifstream& in) {
     for (uint32_t e = 0; e < num_entries; e++) {
       uint32_t key;
       uint8_t value;
+      uint8_t time;
       in.read(reinterpret_cast<char*>(&key), sizeof(key));
       in.read(reinterpret_cast<char*>(&value), sizeof(value));
+      in.read(reinterpret_cast<char*>(&time), sizeof(time));
       if (!in) return false;
       if (value >= count_per_penalty.size()) count_per_penalty.resize(value + 1, 0);
       count_per_penalty[value]++;
-      penalties[id].push_back({key, value});
-      penalties[key].push_back({id, value});
+      penalties[id].push_back({key, value, time});
+      penalties[key].push_back({id, value, time});
     }
     entries_per_map.push_back(num_entries);
     if (id % 256 == 0 || id + 1 == num_conflicts) print_horizon_pair_db_progress_bar(id + 1, num_conflicts);

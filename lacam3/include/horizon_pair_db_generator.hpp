@@ -10,7 +10,6 @@
 // (start, goal) pair, computes pairwise conflict penalties, and serializes
 // the result via generate_and_save() to be loaded at runtime by HorizonPairDB.
 struct HorizonPairDBGenerator {
-  using MDD_Penalty = HorizonPairDB::MDD_Penalty;
 
   // Number of steps ahead we are aware of
   int HORIZON;
@@ -39,7 +38,7 @@ struct HorizonPairDBGenerator {
   // where the index is t * (G->V.size()) + vertex_id.
   std::vector<std::vector<uint32_t>> mdd_by_t_s;
 
-  uint8_t calculate_penalty(MDD& mdd1, MDD& mdd2);
+  MDD_Penalty calculate_penalty(MDD& mdd1, uint32_t mdd2_id);
 
   void generate_mdds();
 

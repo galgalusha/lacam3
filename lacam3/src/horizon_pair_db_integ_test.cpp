@@ -173,20 +173,19 @@ void HorizonPairDB::integration_test1() {
   };
   Graph* G = new Graph(grid);
   HorizonPairDB DB = save_and_load_db(G, HORIZON, MARGIN);
-  // HorizonPairDB DB(G, "bla");
   DistTable* D = create_dist_table(G);
 
+  // uint32_t mdd1 = DB.mdd_id_by_v_g[3 * DB.V_SIZE + 7];
+  // uint32_t mdd2 = DB.mdd_id_by_v_g[7 * DB.V_SIZE + 3];
+  // auto penalty = DB.get_penalty(mdd1, mdd2);
+  // std::cout << "Penalty: " << (int)penalty.penalty << std::endl;
+  // std::cout << "Time   : " << (int)penalty.time << std::endl;
 
-  // MDD MDD_i, MDD_j;
-  // MDD_i.populate(D, G->U[3 * G->width + 4], G->U[3 * G->width + 3], 10, MARGIN);
-  // MDD_j.populate(D, G->U[3 * G->width + 3], G->U[3 * G->width + 4], 10, MARGIN);
-  // std::cout << "MDD_i: " << MDD_i.str() << std::endl;
-  // std::cout << "MDD_j: " << MDD_j.str() << std::endl;
-
-  // HorizonPairDBGenerator generator(G, "bla");
-  // HorizonPairDBGenerator::MARGIN = MARGIN;
-  // uint8_t penalty = generator.calculate_penalty(MDD_i, MDD_j);
-  // std::cout << "Penalty: " << (int)penalty << std::endl;
+  // mdd1 = DB.mdd_id_by_v_g[12 * DB.V_SIZE + 15];
+  // mdd2 = DB.mdd_id_by_v_g[15 * DB.V_SIZE + 12];
+  // penalty = DB.get_penalty(mdd1, mdd2);
+  // std::cout << "Penalty: " << (int)penalty.penalty << std::endl;
+  // std::cout << "Time   : " << (int)penalty.time << std::endl;
   // return;
 
 

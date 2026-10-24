@@ -133,7 +133,7 @@ void PIBT::fill_move_scores(const int i, const std::array<Vertex*, 5>& neighbors
     if (j != NO_AGENT && j != i && Q_to[j] == nullptr) {
       uint32_t mdd_i = get_mdd_id(Q_from[i]->id, goals[i]->id);
       uint32_t mdd_j = get_mdd_id(u_i->id, goals[j]->id);
-      uint8_t penalty = pair_db->get_penalty(mdd_u_i, mdd_j);
+      uint8_t penalty = pair_db->get_penalty(mdd_u_i, mdd_j).penalty;
       score.discounted_max = std::max(score.discounted_max, penalty);
       score.discounted_sum += penalty;
     }

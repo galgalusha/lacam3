@@ -161,13 +161,14 @@ static std::string temp_path_prefix(const std::string& name) {
   return HORIZON_PAIR_DB_ROOT_FOLDER + name;
 }
 
-static void write_bulk_section(std::ofstream& out, const std::vector<std::vector<HorizonPairDBGenerator::MDD_Penalty>>& bulk, int local_size) {
+static void write_bulk_section(std::ofstream& out, const std::vector<std::vector<MDD_Penalty>>& bulk, int local_size) {
   for (int i = 0; i < local_size; i++) {
     uint32_t num_entries = static_cast<uint32_t>(bulk[i].size());
     out.write(reinterpret_cast<const char*>(&num_entries), sizeof(num_entries));
     for (const auto& entry : bulk[i]) {
       out.write(reinterpret_cast<const char*>(&entry.mdd_id), sizeof(entry.mdd_id));
       out.write(reinterpret_cast<const char*>(&entry.penalty), sizeof(entry.penalty));
+      out.write(reinterpret_cast<const char*>(&entry.time), sizeof(entry.time));
     }
   }
 }
@@ -233,8 +234,8 @@ void HorizonPairDBGenerator::generate_all_conflicts_in_bulks(int bulk_size) {
 
       for (uint32_t other_mdd_id : candidates) {
         if ((uint32_t)mdd_id >= other_mdd_id) continue;
-        uint8_t penalty = calculate_penalty(mdd, mdd_by_id[other_mdd_id]);
-        if (penalty > 0) bulk_sync[local_idx].push_back({other_mdd_id, penalty});
+        MDD_Penalty penalty = calculate_penalty(mdd, other_mdd_id);
+        if (penalty.penalty > 0) bulk_sync[local_idx].push_back(penalty);
       }
       ++done;
     };
@@ -333,7 +334,7 @@ bool HorizonPairDBGenerator::generate_and_save() {
 }
 
 
-uint8_t HorizonPairDBGenerator::calculate_penalty(MDD& mdd1, MDD& mdd2) {
+MDD_Penalty HorizonPairDBGenerator::calculate_penalty(MDD& mdd1, uint32_t mdd2_id) {
   struct State {
     uint16_t idx1;
     uint16_t idx2;
@@ -353,9 +354,13 @@ uint8_t HorizonPairDBGenerator::calculate_penalty(MDD& mdd1, MDD& mdd2) {
   current_layer.clear();
   current_layer.push_back({0, 0}); // Both start at index 0 of frontiers[0]
 
+  MDD& mdd2 = mdd_by_id[mdd2_id];
   int horizon = mdd1.frontiers.size();
+  MDD_Penalty result = { mdd2_id, MARGIN + 1, horizon };
+
   for (int t = 1; t < horizon; ++t) {
     next_layer.clear();
+    bool zero_penalty_found = false;
 
     for (const auto& state : current_layer) {
       const MDD::Entry& e1 = mdd1.frontiers[t-1][state.idx1];
@@ -370,18 +375,20 @@ uint8_t HorizonPairDBGenerator::calculate_penalty(MDD& mdd1, MDD& mdd2) {
           uint16_t c2_idx = mdd2.edges[t-1][e2.edge_start + j];
           const MDD::Entry& c2 = mdd2.frontiers[t][c2_idx];
           
-          // Pure penalty extraction
-          if (c1.penalty + c2.penalty > MARGIN) continue;
-
           if (c1.v == c2.v) continue; // Vertex conflict
           if (e1.v == c2.v && e2.v == c1.v) continue; // Edge conflict
+
+          // Pure penalty extraction
+          if (c1.penalty + c2.penalty > MARGIN) continue;
+          if (c1.penalty + c2.penalty == 0) zero_penalty_found = true;
 
           next_layer.push_back({c1_idx, c2_idx});
         }
       }
     }
 
-    if (next_layer.empty()) return MARGIN + 1; 
+    if (!zero_penalty_found) result.time = std::min(result.time, (uint8_t)t);
+    if (next_layer.empty()) return result; 
 
     std::sort(next_layer.begin(), next_layer.end());
     next_layer.erase(std::unique(next_layer.begin(), next_layer.end()), next_layer.end());
@@ -389,13 +396,12 @@ uint8_t HorizonPairDBGenerator::calculate_penalty(MDD& mdd1, MDD& mdd2) {
     current_layer.swap(next_layer);
   }
 
-  uint8_t best_penalty = MARGIN + 1;
   for (const auto& state : current_layer) {
     uint8_t joint_penalty = mdd1.frontiers.back()[state.idx1].penalty + 
                             mdd2.frontiers.back()[state.idx2].penalty;
-    best_penalty = std::min(best_penalty, joint_penalty);
+    result.penalty = std::min(result.penalty, joint_penalty);
   }
   
-  return best_penalty;
+  return result;
 }
 

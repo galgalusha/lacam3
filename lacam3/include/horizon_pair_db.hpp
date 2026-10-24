@@ -10,12 +10,6 @@
 // by PIBT to look up MDD ids and conflict penalties. Holds no generation
 // state (no DistTable, no temporary build indices).
 struct HorizonPairDB {
-
-  struct MDD_Penalty {
-    uint32_t mdd_id;
-    uint8_t penalty;
-  };
-
   Graph* G;
   size_t V_SIZE;
   std::string name;
@@ -54,14 +48,14 @@ struct HorizonPairDB {
 
   bool read_conflicts_section(std::ifstream& in);
 
-  inline uint8_t get_penalty(uint32_t mdd_id1, uint32_t mdd_id2) {
+  inline MDD_Penalty get_penalty(uint32_t mdd_id1, uint32_t mdd_id2) {
     for (auto& entry : penalties[mdd_id1]) {
-      if (entry.mdd_id == mdd_id2) return entry.penalty;
+      if (entry.mdd_id == mdd_id2) return entry;
     }
-    return 0;
+    return { 0, 0, 0 };
   }
 
-  inline uint8_t get_penalty(int v1, int g1, int v2, int g2) {
+  inline MDD_Penalty get_penalty(int v1, int g1, int v2, int g2) {
     uint32_t agent1 = v1 * V_SIZE + g1;
     uint32_t agent2 = v2 * V_SIZE + g2;
     uint32_t mdd_id1 = mdd_id_by_v_g[agent1];
