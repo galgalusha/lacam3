@@ -20,10 +20,10 @@
 struct PIBT {
 
   struct MoveScore {
-    uint8_t max_penalty; 
-    uint8_t discounted_max;
-    uint16_t sum_penalty;
-    uint16_t discounted_sum;
+    double max_penalty; 
+    double discounted_max;
+    double sum_penalty;
+    double discounted_sum;
 
     MoveScore() : max_penalty(0), discounted_max(0), sum_penalty(0), discounted_sum(0) {}
     void reset() { max_penalty = 0; discounted_max = 0; sum_penalty = 0; discounted_sum = 0; }

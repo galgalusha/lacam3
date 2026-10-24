@@ -6,6 +6,26 @@ HorizonPairDB* PIBT::pair_db = nullptr;
 
 const double RANDOM_TIE_WEIGHT = 0.1;
 
+const int MAX_TIME_DISCOUNTING = 7;
+
+const double NO_TIME_DISCOUNTING[] = 
+  {1, 1, 1, 1, 1, 1, 1, 1};
+
+const double LATE_COMMITMENT_TIME_DISCOUNTING[] = 
+  {1.00, 1.00, 1.00, 0.75, 0.25, 0, 0, 0, 0};
+
+const double PENALTY_3_TIME_DISCOUNTING[] = 
+  {1.00, 1.00, 0.85, 0.45, 0.20, 0.05, 0, 0, 0};
+
+const double SIGMOID_TIME_DISCOUNTING[] = 
+  {1.00, 1.00, 0.85, 0.45, 0.20, 0.05, 0, 0, 0};
+
+const double GAL_TIME_DISCOUNTING[] = 
+  { 1.0, 1.0, 1.0 , 0.9, 0.45, 0.2, 0.0, 0, 0};
+
+const double* TIME_DISCOUNTING = GAL_TIME_DISCOUNTING;
+
+
 PIBT::PIBT(const Graph *_G, Config _goals, DistTable *_D, int seed, bool _flg_swap,
            Scatter *_scatter)
     : G(_G),
@@ -107,21 +127,25 @@ void PIBT::fill_move_scores(const int i, const std::array<Vertex*, 5>& neighbors
       uint32_t mdd_j = conflict.mdd_id;
       int j;
 
+      double time_discount = conflict.time <= MAX_TIME_DISCOUNTING ? TIME_DISCOUNTING[conflict.time] : 0;
+      double penalty = conflict.penalty * time_discount;
+      if (!(penalty > 0)) continue;
+
       //
       // Scenario 1: Agent j already moved
       //
       j = mdd_registry.mdd_id_to_agent_next[mdd_j];
       if (j != mdd_registry.NO_AGENT && j != i && Q_to[j] != nullptr) {
-        score.max_penalty = std::max(score.max_penalty, conflict.penalty);
-        score.sum_penalty += conflict.penalty;
+        score.max_penalty = std::max(score.max_penalty, penalty);
+        score.sum_penalty += penalty;
       }
       //
       // Scenario 2: Agent j did not yet move
       //
       j = mdd_registry.mdd_id_to_agent_now[mdd_j];
       if (j != mdd_registry.NO_AGENT && j != i && Q_to[j] == nullptr) {
-        score.discounted_max = std::max(score.discounted_max, conflict.penalty);
-        score.discounted_sum += conflict.penalty;
+        score.discounted_max = std::max(score.discounted_max, penalty);
+        score.discounted_sum += penalty;
       }
     }
 
@@ -133,9 +157,13 @@ void PIBT::fill_move_scores(const int i, const std::array<Vertex*, 5>& neighbors
     if (j != NO_AGENT && j != i && Q_to[j] == nullptr) {
       uint32_t mdd_i = get_mdd_id(Q_from[i]->id, goals[i]->id);
       uint32_t mdd_j = get_mdd_id(u_i->id, goals[j]->id);
-      uint8_t penalty = pair_db->get_penalty(mdd_u_i, mdd_j).penalty;
-      score.discounted_max = std::max(score.discounted_max, penalty);
-      score.discounted_sum += penalty;
+      const auto &conflict = pair_db->get_penalty(mdd_u_i, mdd_j);
+      double time_discount = conflict.time <= MAX_TIME_DISCOUNTING ? TIME_DISCOUNTING[conflict.time] : 0;
+      double penalty = conflict.penalty * time_discount;
+      if (penalty > 0) {
+        score.discounted_max = std::max(score.discounted_max, penalty);
+        score.discounted_sum += penalty;
+      }
     }
   }
 }
@@ -263,8 +291,8 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
 
   if (pair_db != nullptr && swap_agent == NO_AGENT) {
     fill_move_scores(i, C_i_next, K + 1, Q_from, Q_to, 0);
-    lexicographic_sort(i, C_i_next, K, prioritized_vertex);
-    // weighted_sort(i, C_i_next, K, prioritized_vertex);
+    // lexicographic_sort(i, C_i_next, K, prioritized_vertex);
+    weighted_sort(i, C_i_next, K, prioritized_vertex);
   }
   // main loop
   for (int k = 0; k < K + 1; ++k) {
