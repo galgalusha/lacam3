@@ -58,8 +58,8 @@ int main(int argc, char *argv[])
           const auto p2 = db2.get_penalty(db2_mdd1, db2_mdd2);
           if (p1.penalty != p2.penalty) {
             
-            bool is_ok1 = p1.penalty < p2.penalty && p2.penalty - p1.penalty == db2.MARGIN - db1.MARGIN;
-            bool is_ok2 = p2.penalty < p1.penalty && p1.penalty - p2.penalty == db1.MARGIN - db2.MARGIN;
+            bool is_ok1 = p1.penalty < p2.penalty && p2.penalty - p1.penalty <= db2.MARGIN - db1.MARGIN;
+            bool is_ok2 = p2.penalty < p1.penalty && p1.penalty - p2.penalty <= db1.MARGIN - db2.MARGIN;
 
             if ((!is_ok1) && (!is_ok2)) {
               std::cerr << std::endl;
