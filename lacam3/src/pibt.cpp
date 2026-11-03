@@ -10,10 +10,10 @@ const double PELANTY_MAX_FACTOR = 0.75;
 const double PENALTY_SUM_FACTOR = 1 - PELANTY_MAX_FACTOR;
 
 const int MAX_TIME_DISCOUNTING = 7;
-const double TIME_DISCOUNTING[] = 
-  { 1.0, 1.0, 1.0 , 0.9, 0.45, 0.2, 0.0, 0, 0};
 // const double TIME_DISCOUNTING[] = 
-//   { 1.0, 1.0, 1.0 , 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
+//   { 1.0, 1.0, 1.0 , 0.9, 0.45, 0.2, 0.0, 0, 0};
+const double TIME_DISCOUNTING[] = 
+  { 1.0, 1.0, 1.0 , 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
 
 
 PIBT::PIBT(const Graph *_G, Config _goals, DistTable *_D, int seed, bool _flg_swap,
