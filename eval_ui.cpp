@@ -18,6 +18,7 @@
 #include <map>
 #include <mutex>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -166,9 +167,8 @@ std::string eval_runner_path()
   return (fs::path(buf).parent_path() / "eval_runner").string();
 }
 
-void start_run(const std::string& name, bool recover)
+void start_run_locked(const std::string& name, bool recover)
 {
-  std::lock_guard<std::mutex> lock(g_mutex);
   if (g_children.count(name)) return;
   const auto runner = eval_runner_path();
   const auto json = json_path(name);
@@ -192,6 +192,77 @@ void start_run(const std::string& name, bool recover)
   g_children[name] = pid;
   g_last_exit.erase(name);
   g_dirty = true;
+}
+
+void start_run(const std::string& name, bool recover)
+{
+  std::lock_guard<std::mutex> lock(g_mutex);
+  start_run_locked(name, recover);
+}
+
+// ---------------------------------------------------------------- batch
+
+const std::string BATCH_NAME = "_batch_";
+
+struct Batch {
+  bool active = false;
+  int parallel = 1;
+  std::vector<std::string> names;
+  std::vector<bool> complete, started;
+  std::map<std::string, size_t> running;  // eval name -> index
+};
+Batch g_batch;  // guarded by g_mutex
+
+std::string batch_csv_path()
+{
+  return EVAL_DIR + "/" + BATCH_NAME + ".csv";
+}
+
+void write_batch_csv()
+{
+  std::ofstream out(batch_csv_path(), std::ios::trunc);
+  out << "evaluation,is_complete\n";
+  for (size_t i = 0; i < g_batch.names.size(); ++i) {
+    out << g_batch.names[i] << "," << (g_batch.complete[i] ? "true" : "false") << "\n";
+  }
+}
+
+void start_batch()
+{
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (g_batch.active) return;
+  Batch b;
+  b.parallel = std::max(1L, json_int(read_file(json_path(BATCH_NAME)), "parallel_runs"));
+  for (const auto& n : g_names) {
+    if (n != BATCH_NAME) b.names.push_back(n);
+  }
+  if (b.names.empty()) return;
+  b.complete.assign(b.names.size(), false);
+  b.started.assign(b.names.size(), false);
+  b.active = true;
+  g_batch = b;
+  write_batch_csv();
+  g_dirty = true;
+}
+
+// Called with g_mutex held after finished children were reaped.
+void batch_tick()
+{
+  if (!g_batch.active) return;
+  for (size_t i = 0; i < g_batch.names.size() &&
+                     (int)g_batch.running.size() < g_batch.parallel;
+       ++i) {
+    const auto& n = g_batch.names[i];
+    if (g_batch.started[i] || g_children.count(n)) continue;
+    g_batch.started[i] = true;
+    start_run_locked(n, false);
+    if (g_children.count(n)) g_batch.running[n] = i;
+  }
+  if (g_batch.running.empty()) {
+    const bool any_left =
+        std::find(g_batch.started.begin(), g_batch.started.end(), false) != g_batch.started.end();
+    if (!any_left) g_batch.active = false;
+  }
 }
 
 void kill_children()
@@ -225,13 +296,32 @@ void monitor_loop()
         if (waitpid(it->second, &status, WNOHANG) > 0) {
           g_last_exit[it->first] =
               WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+          auto br = g_batch.running.find(it->first);
+          if (br != g_batch.running.end()) {
+            if (g_last_exit[it->first] == 0) {
+              g_batch.complete[br->second] = true;
+              write_batch_csv();
+            }
+            g_batch.running.erase(br);
+          }
           it = g_children.erase(it);
         } else {
           ++it;
         }
       }
+      batch_tick();
       for (const auto& name : g_names) {
         Progress p;
+        if (name == BATCH_NAME) {
+          if (g_batch.active || count_lines(batch_csv_path()) >= 0) {
+            p.has_csv = true;
+            p.total = g_batch.names.size();
+            p.done = std::count(g_batch.complete.begin(), g_batch.complete.end(), true);
+          }
+          p.running = g_batch.active;
+          g_progress[name] = p;
+          continue;
+        }
         const auto text = read_file(json_path(name));
         p.total = json_int(text, "num_of_scenes") * json_int(text, "seeds_per_scene");
         const auto lines = count_lines(csv_path(name));
@@ -398,7 +488,9 @@ void draw(int selected, int& top)
     (void)!write(STDOUT_FILENO, out.data(), out.size());
     return;
   }
-  if (sel.running) {
+  if (sel.running && g_names[selected] == BATCH_NAME) {
+    cv.text(1, px, "BATCH RUNNING", RUNNING, pe);
+  } else if (sel.running) {
     cv.text(1, px, "RUNNING in background (pid " + std::to_string(sel.pid) + ")", RUNNING, pe);
   } else if (sel.last_exit > 0) {
     cv.text(1, px, "last run exited with code " + std::to_string(sel.last_exit), NORMAL, pe);
@@ -578,12 +670,18 @@ int main()
           }
           break;
         case F3:
-          if (!g_names.empty()) {
+          if (!g_names.empty() && g_names[selected] != BATCH_NAME) {
             g_show_stats = compute_stats(csv_path(g_names[selected]), g_stats);
           }
           break;
-        case F1: if (!g_names.empty()) start_run(g_names[selected], false); break;
-        case F2: if (!g_names.empty()) start_run(g_names[selected], true); break;
+        case F1:
+          if (g_names.empty()) break;
+          if (g_names[selected] == BATCH_NAME) start_batch();
+          else start_run(g_names[selected], false);
+          break;
+        case F2:
+          if (!g_names.empty() && g_names[selected] != BATCH_NAME) start_run(g_names[selected], true);
+          break;
         case QUIT: g_quit = true; break;
         default: break;
       }
