@@ -1,0 +1,6 @@
+run_time_milliseconds,is_success,cost,num_of_iterations,num_of_explorations,seed,scen_name
+30153,true,189187,59611,59110,0,warehouse-10-20-10-2-1-random-1.scen
+30162,true,189530,62887,62351,1,warehouse-10-20-10-2-1-random-1.scen
+30163,true,194681,63543,62938,2,warehouse-10-20-10-2-1-random-1.scen
+30167,true,190150,63029,62534,3,warehouse-10-20-10-2-1-random-1.scen
+30165,true,190846,63490,62839,4,warehouse-10-20-10-2-1-random-1.scen
