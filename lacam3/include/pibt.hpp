@@ -19,16 +19,6 @@
 
 struct PIBT {
 
-  struct MoveScore {
-    double max_penalty; 
-    double discounted_max;
-    double sum_penalty;
-    double discounted_sum;
-
-    MoveScore() : max_penalty(0), discounted_max(0), sum_penalty(0), discounted_sum(0) {}
-    void reset() { max_penalty = 0; discounted_max = 0; sum_penalty = 0; discounted_sum = 0; }
-  };
-
   static HorizonPairDB* pair_db;
 
   Config goals;
@@ -47,7 +37,7 @@ struct PIBT {
   std::vector<int> occupied_next;               // for quick collision checking
   std::vector<std::array<Vertex *, 5>> C_next;  // next location candidates
   std::vector<double> tie_breakers;             // random values, used in PIBT
-  std::vector<MoveScore> move_scores;
+  std::vector<double> move_penalties;
   MDDRegistry mdd_registry;
 
   // swap, used in the LaCAM* paper
@@ -60,7 +50,6 @@ struct PIBT {
   PIBT(const Graph *_G, Config _goals, DistTable *_D, int seed = 0, bool _flg_swap = true,
        Scatter *_scatter = nullptr);
   ~PIBT();
-
   bool set_new_config(const Config &Q_from, Config &Q_to,
                       const std::vector<int> &order);
   bool set_new_config_internal(const Config &Q_from, Config &Q_to,
@@ -72,7 +61,7 @@ struct PIBT {
                         Vertex *v_pusher_origin, Vertex *v_puller_origin);
   bool is_swap_possible(Vertex *v_pusher_origin, Vertex *v_puller_origin);
 
-  void fill_move_scores(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to, const int start = 0);
+  void fill_move_penalties(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to, const int start = 0);
 
 
   inline int pair_key(int i, int j) { 
@@ -86,7 +75,4 @@ struct PIBT {
     uint32_t agent_id_for_db = V_size * v + goal;
     return pair_db->mdd_id_by_v_g[agent_id_for_db];
   }
-
-  void lexicographic_sort(int i, std::array<Vertex *, 5>& C_i_next, int K, Vertex* prioritized_vertex);
-  void weighted_sort(int i, std::array<Vertex *, 5>& C_i_next, int K, Vertex* prioritized_vertex);
 };

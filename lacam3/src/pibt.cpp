@@ -5,25 +5,15 @@
 HorizonPairDB* PIBT::pair_db = nullptr;
 
 const double RANDOM_TIE_WEIGHT = 0.1;
+const double UNMOVED_DISCOUNTING = 0.5;
+const double PELANTY_MAX_FACTOR = 0.75;
+const double PENALTY_SUM_FACTOR = 1 - PELANTY_MAX_FACTOR;
 
 const int MAX_TIME_DISCOUNTING = 7;
-
-const double NO_TIME_DISCOUNTING[] = 
-  {1, 1, 1, 1, 1, 1, 1, 1};
-
-const double LATE_COMMITMENT_TIME_DISCOUNTING[] = 
-  {1.00, 1.00, 1.00, 0.75, 0.25, 0, 0, 0, 0};
-
-const double PENALTY_3_TIME_DISCOUNTING[] = 
-  {1.00, 1.00, 0.85, 0.45, 0.20, 0.05, 0, 0, 0};
-
-const double SIGMOID_TIME_DISCOUNTING[] = 
-  {1.00, 1.00, 0.85, 0.45, 0.20, 0.05, 0, 0, 0};
-
-const double GAL_TIME_DISCOUNTING[] = 
+const double TIME_DISCOUNTING[] = 
   { 1.0, 1.0, 1.0 , 0.9, 0.45, 0.2, 0.0, 0, 0};
-
-const double* TIME_DISCOUNTING = GAL_TIME_DISCOUNTING;
+// const double TIME_DISCOUNTING[] = 
+//   { 1.0, 1.0, 1.0 , 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
 
 
 PIBT::PIBT(const Graph *_G, Config _goals, DistTable *_D, int seed, bool _flg_swap,
@@ -39,7 +29,7 @@ PIBT::PIBT(const Graph *_G, Config _goals, DistTable *_D, int seed, bool _flg_sw
       occupied_next(V_size, NO_AGENT),
       C_next(N, std::array<Vertex *, 5>()),
       tie_breakers(V_size, 0),
-      move_scores(V_size),
+      move_penalties(V_size),
       flg_swap(_flg_swap),
       scatter(_scatter),
       mdd_registry(N, pair_db != nullptr ? pair_db->mdd_count : 1)
@@ -115,13 +105,14 @@ bool PIBT::set_new_config(const Config &Q_from, Config &Q_to,
 }
 
 
-void PIBT::fill_move_scores(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to, const int start)
+void PIBT::fill_move_penalties(const int i, const std::array<Vertex*, 5>& neighbors, const int num_neighbors, const Config& Q_from, const Config& Q_to, const int start)
 {
   for (int k = start; k < num_neighbors; ++k) {
     Vertex* u_i = neighbors[k];
-    MoveScore& score = move_scores[u_i->id];
-    score.reset();
     uint32_t mdd_u_i = get_mdd_id(u_i->id, goals[i]->id);
+    // uint32_t mdd_i = get_mdd_id(Q_from[i]->id, goals[i]->id);
+    double penalty_sum = 0;
+    double penalty_max = 0;
 
     for (const auto& conflict : pair_db->penalties[mdd_u_i]) {
       uint32_t mdd_j = conflict.mdd_id;
@@ -136,16 +127,17 @@ void PIBT::fill_move_scores(const int i, const std::array<Vertex*, 5>& neighbors
       //
       j = mdd_registry.mdd_id_to_agent_next[mdd_j];
       if (j != mdd_registry.NO_AGENT && j != i && Q_to[j] != nullptr) {
-        score.max_penalty = std::max(score.max_penalty, penalty);
-        score.sum_penalty += penalty;
+        penalty_max = std::max(penalty_max, penalty);
+        penalty_sum += penalty;
       }
       //
       // Scenario 2: Agent j did not yet move
       //
       j = mdd_registry.mdd_id_to_agent_now[mdd_j];
       if (j != mdd_registry.NO_AGENT && j != i && Q_to[j] == nullptr) {
-        score.discounted_max = std::max(score.discounted_max, penalty);
-        score.discounted_sum += penalty;
+        double discounted_penalty = penalty * UNMOVED_DISCOUNTING;
+        penalty_max = std::max(penalty_max, discounted_penalty);
+        penalty_sum += discounted_penalty;
       }
     }
 
@@ -155,80 +147,22 @@ void PIBT::fill_move_scores(const int i, const std::array<Vertex*, 5>& neighbors
     //
     int j = occupied_now[u_i->id];
     if (j != NO_AGENT && j != i && Q_to[j] == nullptr) {
-      uint32_t mdd_i = get_mdd_id(Q_from[i]->id, goals[i]->id);
       uint32_t mdd_j = get_mdd_id(u_i->id, goals[j]->id);
       const auto &conflict = pair_db->get_penalty(mdd_u_i, mdd_j);
       double time_discount = conflict.time <= MAX_TIME_DISCOUNTING ? TIME_DISCOUNTING[conflict.time] : 0;
-      double penalty = conflict.penalty * time_discount;
+      double penalty = conflict.penalty * time_discount * UNMOVED_DISCOUNTING;
       if (penalty > 0) {
-        score.discounted_max = std::max(score.discounted_max, penalty);
-        score.discounted_sum += penalty;
+        penalty_max = std::max(penalty_max, penalty);
+        penalty_sum += penalty;
       }
     }
+    move_penalties[u_i->id] = PELANTY_MAX_FACTOR * (penalty_max) + PENALTY_SUM_FACTOR * (penalty_sum);
   }
-}
-
-
-void PIBT::lexicographic_sort(int i, std::array<Vertex *, 5>& C_i_next, int K, Vertex* prioritized_vertex) {
-  std::sort(C_i_next.begin(), C_i_next.begin() + K + 1,
-      [&](Vertex *const v1, Vertex *const v2) {
-        if (v1 == prioritized_vertex) return true;
-        if (v2 == prioritized_vertex) return false;
-        int D1 = D->get(i, v1);
-        int D2 = D->get(i, v2);
-        auto& score1 = move_scores[v1->id];
-        auto& score2 = move_scores[v2->id];
-
-        double D1_plus = (double)D1 + 0.7 * score1.max_penalty;
-        double D2_plus = (double)D2 + 0.7 * score2.max_penalty;
-
-        if (D1_plus != D2_plus) 
-          return D1_plus < D2_plus;
-
-        if (D1 != D2) 
-          return D1 < D2;
-
-        // max penalty
-        if (score1.max_penalty != score2.max_penalty) 
-          return score1.max_penalty < score2.max_penalty;
-        // sum penalty
-        if (score1.sum_penalty != score2.sum_penalty) 
-          return score1.sum_penalty < score2.sum_penalty;
-        // max discounted
-        if (score1.discounted_max != score2.discounted_max) 
-          return score1.discounted_max < score2.discounted_max;
-        // sum discounted
-        if (score1.discounted_sum != score2.discounted_sum) 
-          return score1.discounted_sum < score2.discounted_sum;
-        return tie_breakers[v1->id] < tie_breakers[v2->id];
-      });
-}
-
-
-void PIBT::weighted_sort(int i, std::array<Vertex *, 5>& C_i_next, int K, Vertex* prioritized_vertex) {
- std::sort(C_i_next.begin(), C_i_next.begin() + K + 1,
-      [&](Vertex *const v1, Vertex *const v2) {
-        if (v1 == prioritized_vertex) return true;
-        if (v2 == prioritized_vertex) return false;
-        int D1 = D->get(i, v1);
-        int D2 = D->get(i, v2);
-        if (D1 != D2) return D1 < D2;
-
-        auto& score1 = move_scores[v1->id];
-        auto& score2 = move_scores[v2->id];
-        double weight1 = 0.75 * (score1.max_penalty + 0.5 * score1.discounted_max) + 0.25 * (score1.sum_penalty + 0.5 * score1.discounted_sum);
-        double weight2 = 0.75 * (score2.max_penalty + 0.5 * score2.discounted_max) + 0.25 * (score2.sum_penalty + 0.5 * score2.discounted_sum);
-        if (weight1 != weight2) return weight1 < weight2;
-
-        return tie_breakers[v1->id] < tie_breakers[v2->id];
-      });
 }
 
 
 bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
 {
-  // std::cout << "[2] funcPIBT" << std::endl;
-
   const int K = Q_from[i]->neighbor.size();
 
   // exploit scatter data
@@ -284,37 +218,47 @@ bool PIBT::funcPIBT(const int i, const Config &Q_from, Config &Q_to)
     }
   };
 
-  // // dh_values applied lazily on first detected tie in the main loop
-  // bool dh_filled = (pair_db == nullptr || swap_agent != NO_AGENT);
-  // int k_of_last_sorting = prioritized_vertex != nullptr ? 0 : -1;
+  // dh_values applied lazily on first detected tie in the main loop
+  bool pair_db_disabled = (pair_db == nullptr || swap_agent != NO_AGENT);
+  int k_of_last_sorting = prioritized_vertex != nullptr ? 0 : -1;
   auto& C_i_next = C_next[i];
 
-  if (pair_db != nullptr && swap_agent == NO_AGENT) {
-    fill_move_scores(i, C_i_next, K + 1, Q_from, Q_to, 0);
-    // lexicographic_sort(i, C_i_next, K, prioritized_vertex);
-    weighted_sort(i, C_i_next, K, prioritized_vertex);
-  }
+  // if (!pair_db_disabled) {
+  //   fill_move_penalties(i, C_i_next, K + 1, Q_from, Q_to);
+  //   std::sort(C_next[i].begin(), C_next[i].begin() + K + 1,
+  //           [&](Vertex *const v, Vertex *const u) {
+  //             if (v == prioritized_vertex) return true;
+  //             if (u == prioritized_vertex) return false;
+  //             int Dv = D->get(i, v);
+  //             int Du = D->get(i, u);
+  //             if (Dv != Du) return Dv < Du;
+  //             double hv = move_penalties[v->id];
+  //             double hu = move_penalties[u->id];
+  //             if (hv != hu) return hv < hu;
+  //             return tie_breakers[v->id] < tie_breakers[u->id];
+  //           });    
+  // }
+  
   // main loop
   for (int k = 0; k < K + 1; ++k) {
-    // // Lazy dh values evaluation (and re-sorting)
-    // if (!dh_filled && k < K && k > k_of_last_sorting &&
-    //   D->get(i, C_i_next[k]->id) == D->get(i, C_i_next[k + 1]->id)) {
+    // Lazy dh values evaluation (and re-sorting)
+    if (!pair_db_disabled && k < K && k > k_of_last_sorting &&
+      D->get(i, C_i_next[k]->id) == D->get(i, C_i_next[k + 1]->id)) {
       
-    //   k_of_last_sorting = k + 1;
-    //   while (k_of_last_sorting + 1 <= K && 
-    //         D->get(i, C_i_next[k]->id) == D->get(i, C_i_next[k_of_last_sorting + 1]->id)) {
-    //     k_of_last_sorting++;
-    //   }
-    //   fill_move_scores(i, C_i_next, k_of_last_sorting + 1, Q_from, Q_to, k);
-      
-    //   std::sort(C_i_next.begin() + k, C_i_next.begin() + k_of_last_sorting + 1,
-    //           [&](Vertex *const v, Vertex *const u) {
-    //             double hv = move_scores[v->id];
-    //             double hu = move_scores[u->id];
-    //             if (hv != hu) return hv < hu;
-    //             return tie_breakers[v->id] < tie_breakers[u->id];
-    //           });
-    // }
+      k_of_last_sorting = k + 1;
+      while (k_of_last_sorting + 1 <= K && 
+            D->get(i, C_i_next[k]->id) == D->get(i, C_i_next[k_of_last_sorting + 1]->id)) {
+        k_of_last_sorting++;
+      }
+      fill_move_penalties(i, C_i_next, k_of_last_sorting + 1, Q_from, Q_to, k);
+      std::sort(C_i_next.begin() + k, C_i_next.begin() + k_of_last_sorting + 1,
+              [&](Vertex *const v, Vertex *const u) {
+                double hv = move_penalties[v->id];
+                double hu = move_penalties[u->id];
+                if (hv != hu) return hv < hu;
+                return tie_breakers[v->id] < tie_breakers[u->id];
+              });
+    }
 
     auto u = C_i_next[k];
 
