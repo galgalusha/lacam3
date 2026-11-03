@@ -94,6 +94,7 @@ void HorizonPairDBGenerator::generate_mdds() {
     absl::flat_hash_map<MDD, uint32_t> local_mdd_to_id;
     
     for (int g_i = 0; g_i < (int)V_SIZE; g_i++) {
+      if (D->get(v_i, g_i) >= V_SIZE) continue;
       int agent_id = v_i * (int)V_SIZE + g_i;
       
       MDD mdd; 

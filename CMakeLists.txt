@@ -32,6 +32,18 @@ target_compile_features(main PUBLIC cxx_std_17)
 # target_link_options(main PRIVATE -flto)
 target_link_libraries(main lacam3 argparse)
 
+add_executable(cmp_db cmp_db.cpp)
+target_compile_features(cmp_db PUBLIC cxx_std_17)
+target_link_libraries(cmp_db lacam3)
+
+add_executable(horizon_pair_db_gen_bug_reproduction horizon_pair_db_gen_bug_reproduction.cpp)
+target_compile_features(horizon_pair_db_gen_bug_reproduction PUBLIC cxx_std_17)
+target_link_libraries(horizon_pair_db_gen_bug_reproduction lacam3)
+
+add_executable(interactive_dist_table interactive_dist_table.cpp)
+target_compile_features(interactive_dist_table PUBLIC cxx_std_17)
+target_link_libraries(interactive_dist_table lacam3)
+
 add_executable(eval_runner eval_runner.cpp)
 target_compile_features(eval_runner PUBLIC cxx_std_17)
 target_link_libraries(eval_runner lacam3 cereal::cereal)
