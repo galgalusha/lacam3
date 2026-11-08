@@ -110,7 +110,6 @@ void PIBT::fill_move_penalties(const int i, const std::array<Vertex*, 5>& neighb
   for (int k = start; k < num_neighbors; ++k) {
     Vertex* u_i = neighbors[k];
     uint32_t mdd_u_i = get_mdd_id(u_i->id, goals[i]->id);
-    // uint32_t mdd_i = get_mdd_id(Q_from[i]->id, goals[i]->id);
     double penalty_sum = 0;
     double penalty_max = 0;
 
@@ -138,22 +137,6 @@ void PIBT::fill_move_penalties(const int i, const std::array<Vertex*, 5>& neighb
         double discounted_penalty = penalty * UNMOVED_DISCOUNTING;
         penalty_max = std::max(penalty_max, discounted_penalty);
         penalty_sum += discounted_penalty;
-      }
-    }
-
-    //
-    // Scenario 3: Agent j is going to be pushed by agent i so that u_i==u_j
-    //             therefore, mdd_j does not exist in conflicts[mdd_i]
-    //
-    int j = occupied_now[u_i->id];
-    if (j != NO_AGENT && j != i && Q_to[j] == nullptr) {
-      uint32_t mdd_j = get_mdd_id(u_i->id, goals[j]->id);
-      const auto &conflict = pair_db->get_penalty(mdd_u_i, mdd_j);
-      double time_discount = conflict.time <= MAX_TIME_DISCOUNTING ? TIME_DISCOUNTING[conflict.time] : 0;
-      double penalty = conflict.penalty * time_discount * UNMOVED_DISCOUNTING;
-      if (penalty > 0) {
-        penalty_max = std::max(penalty_max, penalty);
-        penalty_sum += penalty;
       }
     }
     move_penalties[u_i->id] = PELANTY_MAX_FACTOR * (penalty_max) + PENALTY_SUM_FACTOR * (penalty_sum);
