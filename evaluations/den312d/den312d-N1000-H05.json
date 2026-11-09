@@ -12,5 +12,5 @@
   "refiner_num": 0,
   "no_refiner": true,
   "verbose": 1,
-  "timeout_seconds": 60
+  "timeout_seconds": 2
 }
