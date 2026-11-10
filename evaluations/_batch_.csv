@@ -1,0 +1,11 @@
+evaluation,is_complete
+WH-N0400-H3-M2-star,true
+WH-N0400-vanilla-star,true
+WH-N0800-H3-M2-star,true
+WH-N0800-vanilla-star,true
+WH-N1200-H3-M2-star,false
+WH-N1200-vanilla-star,false
+WH-N1600-H3-M2-star,false
+WH-N1600-vanilla-star,false
+WH-N2000-H3-M2-star,false
+WH-N2000-vanilla-star,false

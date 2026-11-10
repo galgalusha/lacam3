@@ -1,16 +1,17 @@
 {
   "asset": "den312d",
-  "num_of_agents": 1000,
+  "num_of_agents": 800,
   "num_of_scenes": 20,
   "objective": 2,
-  "seeds_per_scene": 30,
+  "seeds_per_scene": 20,
   "pair_db": true,
   "pair_db_horizon": 3,
-  "no_star": true,
+  "pair_db_margin": 2,
+  "no_star": false,
   "no_scatter": false,
   "pibt_num": 10,
   "refiner_num": 0,
   "no_refiner": true,
   "verbose": 1,
-  "timeout_seconds": 2
+  "timeout_seconds": 61
 }
