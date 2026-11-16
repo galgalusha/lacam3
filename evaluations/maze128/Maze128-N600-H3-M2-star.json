@@ -1,17 +1,17 @@
 {
-  "asset": "maze-51-rooms",
-  "num_of_agents": 300,
-  "num_of_scenes": 4,
+  "asset": "maze-128-128-1",
+  "num_of_agents": 600,
+  "num_of_scenes": 20,
   "objective": 2,
-  "seeds_per_scene": 20,
+  "seeds_per_scene": 10,
   "pair_db": true,
   "pair_db_horizon": 3,
   "pair_db_margin": 2,
-  "no_star": false,
+  "no_star": true,
   "no_scatter": true,
   "pibt_num": 1,
   "refiner_num": 0,
   "no_refiner": true,
   "verbose": 1,
-  "timeout_seconds": 60
+  "timeout_seconds": 2
 }
