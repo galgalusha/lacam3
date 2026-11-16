@@ -52,6 +52,10 @@ add_executable(eval_runner eval_runner.cpp)
 target_compile_features(eval_runner PUBLIC cxx_std_17)
 target_link_libraries(eval_runner lacam3 cereal::cereal)
 
+add_executable(generate_scene generate_scene.cpp)
+target_compile_features(generate_scene PUBLIC cxx_std_17)
+target_link_libraries(generate_scene lacam3)
+
 add_executable(eval_ui eval_ui.cpp)
 target_compile_features(eval_ui PUBLIC cxx_std_17)
 add_dependencies(eval_ui eval_runner)
@@ -66,3 +70,13 @@ foreach(file ${TEST_FILES})
   target_link_libraries(${name} lacam3)
   add_test(${name} ${name})
 endforeach()
+
+add_executable(verify_generated_scene tests/verify_generated_scene.cpp)
+target_link_libraries(verify_generated_scene lacam3)
+
+add_test(NAME generate_scene_cli
+  COMMAND ${CMAKE_COMMAND}
+    -DGENERATOR=$<TARGET_FILE:generate_scene>
+    -DVERIFY=$<TARGET_FILE:verify_generated_scene>
+    -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/generate_scene_test
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/generate_scene_cli.cmake)
